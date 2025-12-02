@@ -6,8 +6,11 @@ import {
   SlidersHorizontal, Layers, Activity, Droplets, Sparkles
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { FaceMesh } from '@mediapipe/face_mesh';
-import { Camera } from '@mediapipe/camera_utils';
+import * as FaceMeshModule from '@mediapipe/face_mesh';
+import * as CameraUtils from '@mediapipe/camera_utils';
+
+const FaceMesh = FaceMeshModule.FaceMesh;
+const Camera = CameraUtils.Camera;
 
 // Configuration for scan steps
 const SCAN_STEPS = [
