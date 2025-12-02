@@ -39,13 +39,13 @@ const SCAN_STEPS = [
     target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
     guideType: 'face'
   },
-  { 
-    id: 'top', 
-    label: 'Top View', 
-    instruction: 'Tilt head DOWN', 
-    // Relaxed PITCH: 65 to 115 degrees (90 +/- 25). 
-    // Increased tolerance from 10 to 25 to make it easier for users.
-    target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 20, pitchTolerance: 25 }, 
+  {
+    id: 'top',
+    label: 'Top View',
+    instruction: 'Tilt head DOWN to show crown',
+    // STRICT PITCH: 80 to 100 degrees (90 +/- 10).
+    // Tightened tolerance to ensure proper top view capture.
+    target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 15, pitchTolerance: 10 },
     guideType: 'face'
   },
   { 
@@ -172,10 +172,10 @@ const LiveScanner = ({ onComplete, onCancel }) => {
          
          if (lighting === 'good' && !hasFace) {
              setStatus('locked');
-             setScanProgress(prev => Math.min(prev + 1.5, 100));
+             setScanProgress(prev => Math.min(prev + 1, 100));
          } else {
-             setScanProgress(0);
-             if (hasFace) setStatus('aligning'); 
+             setScanProgress(prev => Math.max(0, prev - 10));
+             if (hasFace) setStatus('aligning');
          }
       }
       return;
@@ -206,10 +206,10 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
     if (isYawGood && isPitchGood && isRollGood) {
       setStatus('locked');
-      if (scanProgress < 100) setScanProgress(prev => prev + 3); 
+      if (scanProgress < 100) setScanProgress(prev => prev + 2);
     } else {
       setStatus('aligning');
-      setScanProgress(prev => Math.max(0, prev - 5)); 
+      setScanProgress(prev => Math.max(0, prev - 8));
     }
 
   }, [currentStep, scanProgress, status]);
@@ -677,13 +677,13 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           </svg>
           
           <button
-            onClick={() => setScanProgress(100)} // Manual override
-            className="relative w-16 h-16 rounded-full bg-white hover:scale-95 transition-transform flex items-center justify-center group"
+            disabled={status === 'capturing'}
+            className="relative w-16 h-16 rounded-full bg-white transition-transform flex items-center justify-center group pointer-events-none"
           >
             {status === 'capturing' ? (
               <Check className="w-8 h-8 text-green-600" />
             ) : (
-              <CameraIcon className="w-8 h-8 text-gray-900 group-hover:text-indigo-600 transition-colors" />
+              <CameraIcon className="w-8 h-8 text-gray-900" />
             )}
           </button>
         </div>
