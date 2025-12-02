@@ -171,7 +171,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
          
          if (lighting === 'good' && !hasFace) {
              setStatus('locked');
-             setScanProgress(prev => Math.min(prev + 1, 100));
+             setScanProgress(prev => Math.min(prev + 5, 100));
          } else {
              setScanProgress(prev => Math.max(0, prev - 10));
              if (hasFace) setStatus('aligning');
@@ -205,10 +205,10 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
     if (isYawGood && isPitchGood && isRollGood) {
       setStatus('locked');
-      if (scanProgress < 100) setScanProgress(prev => prev + 2);
+      if (scanProgress < 100) setScanProgress(prev => prev + 8);
     } else {
       setStatus('aligning');
-      setScanProgress(prev => Math.max(0, prev - 8));
+      setScanProgress(prev => Math.max(0, prev - 10));
     }
 
   }, [currentStep, scanProgress, status]);
