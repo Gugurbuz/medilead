@@ -7,6 +7,7 @@ import PhotoUpload from '@/components/PhotoUpload';
 import PatientForm from '@/components/PatientForm';
 import AnalysisReport from '@/components/AnalysisReport';
 import { processHairImage } from '@/lib/visionModel';
+import { analyzeHairImages, analyzeHairlineCoordinates } from '@/lib/geminiService';
 
 const PatientDashboard = () => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -51,112 +52,88 @@ const PatientDashboard = () => {
 
   const performAnalysis = async (pData, photos) => {
     setIsAnalyzing(true);
-    setCurrentStep(2.5); 
-    
-    // Stage 1: Initial Processing
-    setAnalysisStage('Initializing ViT Model...');
-    setAnalysisProgress(10);
-    await new Promise(r => setTimeout(r, 800));
+    setCurrentStep(2.5);
 
-    // Stage 2: Vision Transformer Analysis
-    setAnalysisStage('Running Segmentation (ViT-B/16)...');
-    const processedPhotos = [];
-    const totalPhotos = photos.length;
-    
-    for (let i = 0; i < totalPhotos; i++) {
-       const photo = photos[i];
-       try {
-          // Actually process the image pixels
+    try {
+      setAnalysisStage('Initializing Vision Models...');
+      setAnalysisProgress(5);
+      await new Promise(r => setTimeout(r, 500));
+
+      setAnalysisStage('Running Local Segmentation (ViT-B/16)...');
+      const processedPhotos = [];
+      const totalPhotos = photos.length;
+
+      for (let i = 0; i < totalPhotos; i++) {
+        const photo = photos[i];
+        try {
           const processed = await processHairImage(photo);
           processedPhotos.push(processed);
-          
-          // Update progress
-          const progress = 10 + Math.round(((i + 1) / totalPhotos) * 60);
+
+          const progress = 5 + Math.round(((i + 1) / totalPhotos) * 30);
           setAnalysisProgress(progress);
-       } catch (e) {
+        } catch (e) {
           console.error("Failed to analyze photo", e);
-          processedPhotos.push(photo); // Fallback to original
-       }
+          processedPhotos.push(photo);
+        }
+      }
+
+      setUploadedPhotos(processedPhotos);
+      localStorage.setItem('patient_photos', JSON.stringify(processedPhotos));
+
+      setAnalysisStage('Analyzing with Gemini AI...');
+      setAnalysisProgress(40);
+
+      const geminiAnalysis = await analyzeHairImages(processedPhotos, pData);
+
+      setAnalysisProgress(70);
+      setAnalysisStage('Extracting hairline coordinates...');
+
+      const frontPhoto = processedPhotos.find(p => p.type === 'front');
+      let hairlineData = null;
+      if (frontPhoto) {
+        try {
+          hairlineData = await analyzeHairlineCoordinates(frontPhoto.preview);
+        } catch (e) {
+          console.error('Hairline analysis failed', e);
+        }
+      }
+
+      setAnalysisProgress(90);
+      setAnalysisStage('Generating treatment timeline...');
+      await new Promise(r => setTimeout(r, 800));
+
+      const finalAnalysis = {
+        ...geminiAnalysis,
+        hairlineData,
+        timeline: {
+          immediate: ['Start medical treatment', 'Schedule consultation with surgeon'],
+          threeMonths: ['Begin prescribed medication', 'Complete pre-surgery evaluations'],
+          sixMonths: ['Schedule hair transplant procedure', 'Continue medical treatments'],
+          oneYear: ['Post-transplant follow-up', 'Evaluate results and plan maintenance']
+        }
+      };
+
+      setAnalysisProgress(100);
+      setAnalysisStage('Finalizing Report...');
+      await new Promise(r => setTimeout(r, 500));
+
+      completeAnalysis(pData, processedPhotos, finalAnalysis);
+    } catch (error) {
+      console.error('Analysis error:', error);
+      setIsAnalyzing(false);
+      setCurrentStep(2);
+
+      if (error.message && error.message.includes('API key')) {
+        alert('Gemini API key not configured. Please add VITE_GEMINI_API_KEY to your .env file.');
+      } else {
+        alert('Analysis failed: ' + error.message);
+      }
     }
-
-    // Update stored photos with processed data (masks/heatmaps)
-    setUploadedPhotos(processedPhotos);
-    localStorage.setItem('patient_photos', JSON.stringify(processedPhotos));
-
-    // Stage 3: Generating Insights
-    setAnalysisStage('Synthesizing Density Maps...');
-    setAnalysisProgress(85);
-    await new Promise(r => setTimeout(r, 1500));
-
-    // Stage 4: Finalizing
-    setAnalysisStage('Finalizing Report...');
-    setAnalysisProgress(100);
-    await new Promise(r => setTimeout(r, 800));
-
-    completeAnalysis(pData, processedPhotos);
   };
 
-  const completeAnalysis = (data, photos) => {
-    // Calculate score based on actual detected density
-    const avgDensity = photos.reduce((acc, p) => acc + (p.processed?.densityScore || 50), 0) / photos.length;
-    const normalizedScore = Math.min(10, Math.max(2, Math.round(avgDensity / 10) + 1));
-
-    const mockAnalysis = {
-      overallScore: normalizedScore, 
-      hairLossStage: avgDensity < 40 ? 'Norwood Scale IV-V' : avgDensity < 65 ? 'Norwood Scale II-III' : 'Norwood Scale I',
-      hairDensity: {
-        frontal: Math.round(avgDensity * 0.9),
-        crown: Math.round(avgDensity * 0.8),
-        temporal: Math.round(avgDensity * 0.85),
-        donor: Math.round(avgDensity * 1.2) // Donor usually stronger
-      },
-      donorQuality: avgDensity > 50 ? 'Good' : 'Fair',
-      estimatedGrafts: avgDensity < 50 ? '3000-3500' : '1500-2000',
-      recommendations: [
-        {
-          title: 'Follicular Unit Extraction (FUE)',
-          priority: 'high',
-          description: 'Recommended primary treatment based on your hair loss pattern and donor area quality.',
-          details: [
-            'Minimally invasive procedure',
-            'Natural-looking results',
-            'Quick recovery time (5-7 days)',
-            'Estimated cost: $8,000 - $12,000'
-          ]
-        },
-        {
-          title: 'Medical Treatment (Finasteride + Minoxidil)',
-          priority: 'medium',
-          description: 'Complementary treatment to maintain existing hair and support transplant results.',
-          details: [
-            'Daily oral and topical medication',
-            'Slows hair loss progression',
-            'May stimulate regrowth',
-            'Long-term commitment required'
-          ]
-        },
-        {
-          title: 'PRP Therapy',
-          priority: 'medium',
-          description: 'Platelet-Rich Plasma therapy to improve hair density and thickness.',
-          details: [
-            'Natural growth factor stimulation',
-            '3-4 sessions recommended initially',
-            'Maintenance sessions every 6 months',
-            'Estimated cost: $500 - $800 per session'
-          ]
-        }
-      ],
-      timeline: {
-        immediate: ['Start Minoxidil treatment', 'Schedule consultation with surgeon'],
-        threeMonths: ['Begin Finasteride if approved', 'Complete pre-surgery evaluations'],
-        sixMonths: ['Schedule hair transplant procedure', 'Continue medical treatments'],
-        oneYear: ['Post-transplant follow-up', 'Evaluate results and plan maintenance']
-      }
-    };
-
-    setAnalysisData(mockAnalysis);
-    localStorage.setItem('analysis_data', JSON.stringify(mockAnalysis));
+  const completeAnalysis = (data, photos, analysis) => {
+    setAnalysisData(analysis);
+    localStorage.setItem('analysis_data', JSON.stringify(analysis));
     setIsAnalyzing(false);
     setCurrentStep(3);
   };

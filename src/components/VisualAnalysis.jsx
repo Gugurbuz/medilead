@@ -37,14 +37,14 @@ const VisualAnalysis = ({ analyzedPhotos }) => {
         <div>
           <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Eye className="w-5 h-5 text-indigo-600" />
-            ViT Segmentation Analysis
+            AI Hair Analysis
           </h3>
           <p className="text-sm text-gray-500 mt-1">
-            AI-powered vision transformer results showing hair boundaries and density zones.
+            Real-time AI analysis using Gemini vision model and local segmentation processing.
           </p>
         </div>
-        <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 self-start sm:self-center whitespace-nowrap">
-          Model: ViT-B/16-Hair
+        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 self-start sm:self-center whitespace-nowrap">
+          Gemini 2.0 Flash + Local ViT
         </Badge>
       </div>
 
@@ -122,8 +122,8 @@ const VisualAnalysis = ({ analyzedPhotos }) => {
                      />
                    )}
                    <div className="absolute bottom-4 left-4 bg-black/70 backdrop-blur text-white text-xs p-2 rounded max-w-[200px] border border-white/10">
-                      <p className="font-semibold mb-1 text-blue-300">Segmentation Layer</p>
-                      Blue overlay indicates detected hair follicles identified by the ViT model.
+                      <p className="font-semibold mb-1 text-blue-300">AI Segmentation</p>
+                      Hair regions detected using local Vision Transformer analysis.
                    </div>
                 </TabsContent>
 
