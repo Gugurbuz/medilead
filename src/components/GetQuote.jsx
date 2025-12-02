@@ -2,12 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle2, DollarSign, Calendar, Phone, Mail, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+import { supabase } from '@/lib/supabase';
 
 const GetQuote = ({ isOpen, onClose, analysisData, photos }) => {
   const [step, setStep] = useState('form'); // form, success
