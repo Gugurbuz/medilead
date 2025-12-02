@@ -7,7 +7,7 @@ import { useToast } from '@/components/ui/use-toast';
 import HairDensityMap from '@/components/HairDensityMap';
 import TreatmentRecommendations from '@/components/TreatmentRecommendations';
 import TreatmentTimeline from '@/components/TreatmentTimeline';
-import ConsultationBooking from './ConsultationBooking';
+import GetQuote from './GetQuote';
 import MatchedClinics from './MatchedClinics';
 import VisualAnalysis from './VisualAnalysis';
 import html2canvas from 'html2canvas';
@@ -16,7 +16,7 @@ import jsPDF from 'jspdf';
 const AnalysisReport = ({ data, patientData, photos, onStartOver }) => {
   const { toast } = useToast();
   const [isUnlocked, setIsUnlocked] = useState(false);
-  const [showBooking, setShowBooking] = useState(false);
+  const [showQuote, setShowQuote] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const reportRef = useRef(null);
 
@@ -148,9 +148,11 @@ const AnalysisReport = ({ data, patientData, photos, onStartOver }) => {
 
   return (
     <div className="relative min-h-screen">
-      <ConsultationBooking 
-        isOpen={showBooking} 
-        onClose={() => setShowBooking(false)} 
+      <GetQuote
+        isOpen={showQuote}
+        onClose={() => setShowQuote(false)}
+        analysisData={data}
+        photos={photos}
       />
 
       {!isUnlocked && (
@@ -429,23 +431,23 @@ const AnalysisReport = ({ data, patientData, photos, onStartOver }) => {
 
         <MatchedClinics />
 
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl shadow-lg p-8 text-white relative overflow-hidden group">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl shadow-lg p-8 text-white relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full transform translate-x-1/2 -translate-y-1/2 group-hover:scale-110 transition-transform duration-700"></div>
           <div className="flex flex-col md:flex-row items-start md:items-center gap-6 relative z-10">
             <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center flex-shrink-0 backdrop-blur-sm shadow-inner">
-              <Calendar className="w-8 h-8" />
+              <TrendingUp className="w-8 h-8" />
             </div>
             <div className="flex-1">
               <h3 className="text-2xl font-bold mb-2">Ready to Restore Your Hair?</h3>
-              <p className="text-indigo-100 mb-0 max-w-2xl text-lg">
-                Take the next step towards your transformation. Schedule a free consultation with our specialists to discuss your personalized treatment plan.
+              <p className="text-emerald-100 mb-0 max-w-2xl text-lg">
+                Ready to take the next step? Get personalized quotes from top-rated hair restoration clinics tailored to your analysis.
               </p>
             </div>
             <Button
-              onClick={() => setShowBooking(true)}
-              className="bg-white text-indigo-600 hover:bg-indigo-50 px-8 py-6 text-lg font-bold shadow-xl hover:shadow-2xl transition-all transform hover:-translate-y-1"
+              onClick={() => setShowQuote(true)}
+              className="bg-white text-emerald-600 hover:bg-emerald-50 px-8 py-6 text-lg font-bold shadow-xl hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
-              Schedule Consultation
+              Get Free Quotes
             </Button>
           </div>
         </div>
