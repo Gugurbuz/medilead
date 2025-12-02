@@ -253,6 +253,15 @@ const AnalysisReport = ({ data, patientData, photos, onStartOver }) => {
             <div>
               <h2 className="text-3xl font-bold text-gray-900 mb-2">AI Analysis Report</h2>
               <p className="text-gray-600">Generated on {new Date().toLocaleDateString()}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-1.5 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full">
+                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                  <span className="text-xs font-semibold text-green-700">Gemini 2.0 Verified</span>
+                </div>
+                <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-full">
+                  <span className="text-xs font-semibold text-blue-700">{photos.length} Photos Analyzed</span>
+                </div>
+              </div>
             </div>
             <div className="flex gap-3 no-print">
               <Button
@@ -332,6 +341,87 @@ const AnalysisReport = ({ data, patientData, photos, onStartOver }) => {
         <VisualAnalysis analyzedPhotos={photos} />
 
         <HairDensityMap densityData={data.hairDensity} />
+
+        {data.recessionPattern && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="bg-white rounded-2xl shadow-lg p-8 border border-gray-200"
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">Recession Pattern Analysis</h3>
+                <p className="text-sm text-gray-500">AI-detected hair loss progression markers</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {Object.entries(data.recessionPattern).map(([key, value], index) => {
+                const labels = {
+                  frontalRecession: 'Frontal Hairline',
+                  crownThinning: 'Crown Area',
+                  templeRecession: 'Temple Regions'
+                };
+                const colors = {
+                  none: 'bg-green-100 text-green-700 border-green-200',
+                  mild: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+                  moderate: 'bg-orange-100 text-orange-700 border-orange-200',
+                  severe: 'bg-red-100 text-red-700 border-red-200'
+                };
+                return (
+                  <motion.div
+                    key={key}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.6 + index * 0.1 }}
+                    className={`p-4 rounded-lg border-2 ${colors[value] || 'bg-gray-100 text-gray-700 border-gray-200'}`}
+                  >
+                    <div className="text-sm font-medium opacity-80 mb-1">{labels[key]}</div>
+                    <div className="text-lg font-bold capitalize">{value}</div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {data.detailedObservations && data.detailedObservations.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="bg-white rounded-2xl shadow-lg p-8 border border-gray-200"
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">AI Clinical Observations</h3>
+                <p className="text-sm text-gray-500">Detailed findings from Gemini vision analysis</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {data.detailedObservations.map((observation, index) => (
+                <motion.div
+                  key={index}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.6 + index * 0.1 }}
+                  className="flex gap-3 p-4 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg border border-indigo-100"
+                >
+                  <div className="flex-shrink-0 w-6 h-6 bg-indigo-200 rounded-full flex items-center justify-center text-indigo-700 font-bold text-sm mt-0.5">
+                    {index + 1}
+                  </div>
+                  <p className="text-gray-700 leading-relaxed">{observation}</p>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         <TreatmentRecommendations recommendations={data.recommendations} />
 

@@ -31,7 +31,15 @@ const HairDensityMap = ({ densityData }) => {
       transition={{ delay: 0.4 }}
       className="bg-white rounded-2xl shadow-lg p-8 border border-gray-200"
     >
-      <h3 className="text-2xl font-bold text-gray-900 mb-6">Hair Density Analysis</h3>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h3 className="text-2xl font-bold text-gray-900">Hair Density Analysis</h3>
+          <p className="text-sm text-gray-500 mt-1">AI-measured follicular density per scalp region</p>
+        </div>
+        <div className="bg-green-50 border border-green-200 px-3 py-1 rounded-full">
+          <span className="text-xs font-semibold text-green-700">✓ Gemini AI Verified</span>
+        </div>
+      </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="relative bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-8 min-h-[400px] flex items-center justify-center">
@@ -101,25 +109,37 @@ const HairDensityMap = ({ densityData }) => {
             );
           })}
 
-          <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h4 className="font-semibold text-blue-900 mb-2">Density Scale:</h4>
-            <div className="space-y-1 text-sm text-blue-800">
+          <div className="mt-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
+            <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+              AI Measurement Scale
+            </h4>
+            <div className="space-y-2 text-sm text-blue-800">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 bg-green-500 rounded-full" />
-                <span>75-100%: Excellent density</span>
+                <span className="font-medium">75-100%:</span>
+                <span>Excellent density - Minimal intervention needed</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 bg-yellow-500 rounded-full" />
-                <span>50-74%: Moderate thinning</span>
+                <span className="font-medium">50-74%:</span>
+                <span>Moderate thinning - Medical treatment recommended</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 bg-orange-500 rounded-full" />
-                <span>25-49%: Significant thinning</span>
+                <span className="font-medium">25-49%:</span>
+                <span>Significant thinning - Transplant candidate</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 bg-red-500 rounded-full" />
-                <span>0-24%: Severe hair loss</span>
+                <span className="font-medium">0-24%:</span>
+                <span>Severe loss - Immediate consultation required</span>
               </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-blue-200">
+              <p className="text-xs text-blue-700">
+                <strong>Analysis Method:</strong> Gemini 2.0 Flash vision model analyzing follicle distribution, hair thickness, and scalp visibility across multiple photo angles.
+              </p>
             </div>
           </div>
         </div>
