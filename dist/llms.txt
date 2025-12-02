@@ -1,2 +1,0 @@
-## Pages
-- [Hair Loss Analysis - Patient Portal](/): Upload photos and receive AI-powered hair loss analysis with personalized treatment recommendations

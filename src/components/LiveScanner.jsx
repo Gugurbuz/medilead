@@ -6,11 +6,9 @@ import {
   SlidersHorizontal, Layers, Activity, Droplets, Sparkles
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import * as FaceMeshModule from '@mediapipe/face_mesh';
-import * as CameraUtils from '@mediapipe/camera_utils';
-
-const FaceMesh = FaceMeshModule.FaceMesh;
-const Camera = CameraUtils.Camera;
+import { FaceMesh } from '@mediapipe/face_mesh';
+import { Camera } from '@mediapipe/camera_utils';
+import { validateScanFrame } from '@/lib/geminiService';
 
 // Configuration for scan steps
 const SCAN_STEPS = [
@@ -288,7 +286,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     return { valid: true };
   };
 
-  const handleCapture = useCallback(() => {
+  const handleCapture = useCallback(async () => {
     if (!videoRef.current || !isMountedRef.current) return;
 
     const validation = validateCapture(pose, currentStep, quality);
@@ -319,6 +317,45 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+    try {
+      toast({
+        title: "AI Validation",
+        description: "Analyzing photo with Gemini AI...",
+        duration: 2000,
+      });
+
+      const aiValidation = await validateScanFrame(dataUrl, currentStep.label);
+
+      if (!aiValidation.valid) {
+        toast({
+          title: "AI Rejected Photo",
+          description: aiValidation.message,
+          variant: "destructive",
+          duration: 4000,
+        });
+        setScanProgress(0);
+        setStatus('searching');
+        return;
+      }
+
+      toast({
+        title: "AI Validation Passed",
+        description: aiValidation.message,
+        duration: 2000,
+      });
+    } catch (error) {
+      console.error('AI validation error:', error);
+      toast({
+        title: "AI Validation Error",
+        description: error.message || "Could not validate with AI. Please check your API key.",
+        variant: "destructive",
+        duration: 5000,
+      });
+      setScanProgress(0);
+      setStatus('searching');
+      return;
+    }
 
     const newPhoto = {
       id: Date.now(),
