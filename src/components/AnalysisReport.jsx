@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import TreatmentRecommendations from './TreatmentRecommendations';
 import TreatmentTimeline from './TreatmentTimeline';
 import HairDensityMap from './HairDensityMap';
-// Fixed import path for visionModel
+// Fixed import path for visionModel - going up one level from 'components' to 'src', then into 'lib'
 import { createPremiumHairVisual } from '../lib/visionModel';
 
 const AnalysisReport = ({ results, patientData, onRestart }) => {
