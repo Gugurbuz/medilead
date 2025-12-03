@@ -1,24 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download, Share2, FileText, Activity, User, Calendar,
   ChevronDown, ChevronUp, Info, CheckCircle2, AlertCircle,
   Stethoscope, Microscope, Layers, ArrowRight, Sparkles,
-  Wand2 // Yeni ikon eklendi
+  Wand2
 } from 'lucide-react';
-import { useToast } from '@/src/components/ui/use-toast';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/src/components/ui/tabs';
+// Import paths fixed to relative to avoid alias resolution issues
+import { useToast } from './ui/use-toast';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import TreatmentRecommendations from './TreatmentRecommendations';
 import TreatmentTimeline from './TreatmentTimeline';
 import HairDensityMap from './HairDensityMap';
-import { createPremiumHairVisual } from '@/src/lib/visionModel';
+// Fixed import path for visionModel
+import { createPremiumHairVisual } from '../lib/visionModel';
 
 const AnalysisReport = ({ results, patientData, onRestart }) => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('summary');
   const [expandedSection, setExpandedSection] = useState(null);
   const [premiumVisuals, setPremiumVisuals] = useState({});
-  const [isProcessingVisuals, setIsProcessingVisuals] = useState(true); // Görsel işleme durumu
+  const [isProcessingVisuals, setIsProcessingVisuals] = useState(true);
 
   const { analysis, photos, timestamp } = results;
 
@@ -33,17 +35,14 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
       setIsProcessingVisuals(true);
       const visuals = {};
       
-      // Tüm fotoğrafları paralel olarak işle
       await Promise.all(photos.map(async (photo) => {
         try {
-          // Generate a premium visual for each photo
           const premiumUrl = await createPremiumHairVisual(photo.preview);
           if (isMounted) {
               visuals[photo.type] = premiumUrl;
           }
         } catch (error) {
           console.error(`Error generating premium visual for ${photo.type}:`, error);
-          // Fallback to original image if generation fails
           if (isMounted) {
               visuals[photo.type] = photo.preview;
           }
@@ -69,7 +68,7 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
       toast({
         title: "İndirme Tamamlandı",
         description: "Raporunuz başarıyla indirildi.",
-        variant: "default", // success variantı olmadığı için default kullandım, yeşil stil eklenebilir
+        variant: "default",
         className: "bg-green-600 text-white border-green-700"
       });
     }, 2000);
@@ -208,7 +207,6 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
           </TabsList>
 
           <TabsContent value="summary" className="space-y-6">
-            {/* Key Metrics */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <SummaryCard
                 title="Genel Skor"
@@ -240,7 +238,6 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
               />
             </div>
 
-            {/* AI Visual Analysis - Premium Visuals */}
             <div className="bg-gray-900/50 backdrop-blur-xl p-6 rounded-2xl border border-white/10">
               <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-400" />
@@ -257,20 +254,17 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
                     {photos.map((photo) => (
                       <div key={photo.id} className="relative group rounded-xl overflow-hidden border border-white/10 bg-black shadow-lg">
                         <div className="aspect-[4/5] relative">
-                          {/* Use the premium visual URL if available, otherwise fallback to preview */}
                           <img
                             src={premiumVisuals[photo.type] || photo.preview}
                             alt={`${photo.label} Analizi`}
                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                           />
                           
-                          {/* Premium Badge Effect */}
                           <div className="absolute top-3 right-3 bg-indigo-600/90 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 border border-white/20 shadow-sm">
                              <Wand2 className="w-3 h-3" />
                              AI ENHANCED
                           </div>
 
-                          {/* Gradient Overlay & Info */}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-100 transition-opacity">
                             <div className="absolute bottom-0 left-0 right-0 p-4">
                               <p className="text-indigo-300 text-xs font-semibold uppercase tracking-wider mb-1">Bölge</p>
@@ -291,10 +285,8 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
               </div>
             </div>
 
-            {/* Detailed Observations */}
             <DetailedObservations />
 
-            {/* Primary Recommendation */}
             {analysis.recommendations.length > 0 && (
               <div className="bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 p-6 rounded-2xl mt-6">
                 <div className="flex items-start gap-4">
@@ -332,7 +324,6 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
           </TabsContent>
         </Tabs>
 
-        {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row justify-center gap-4 mt-12 pb-8">
           <button
             onClick={onRestart}
