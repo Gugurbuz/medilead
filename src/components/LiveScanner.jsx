@@ -1,13 +1,14 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera as CameraIcon, RefreshCw, X, User, Sun, Check, AlertCircle,
   SlidersHorizontal, Layers, Activity, Droplets, Sparkles
 } from 'lucide-react';
-import { useToast } from '@/components/ui/use-toast';
-import { FaceMesh } from '@mediapipe/face_mesh';
-import { Camera } from '@mediapipe/camera_utils';
+// Import path fixed to relative to avoid alias issues
+import { useToast } from './ui/use-toast';
+
+// MediaPipe imports removed to prevent build errors.
+// We will load them dynamically from CDN.
 
 // Configuration for scan steps
 const SCAN_STEPS = [
@@ -15,8 +16,6 @@ const SCAN_STEPS = [
     id: 'front', 
     label: 'Front View', 
     instruction: 'Look directly at camera', 
-    // Pitch target 10 (slightly down) with wide tolerance allows natural head position.
-    // Range: -10 (slightly up) to +30 (looking down). Prevents "Look Up" for neutral poses.
     target: { yaw: 0, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 20 }, 
     guideType: 'face'
   },
@@ -24,8 +23,6 @@ const SCAN_STEPS = [
     id: 'left', 
     label: 'Right Profile', 
     instruction: 'Turn head slowly to your LEFT', 
-    // STRICT YAW: -75 to -95 degrees (Magnitude > 75).
-    // LOOSE PITCH: -30 to +50. Avoids pitch errors during rotation.
     target: { yaw: -85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
     guideType: 'face'
   },
@@ -33,8 +30,6 @@ const SCAN_STEPS = [
     id: 'right', 
     label: 'Left Profile', 
     instruction: 'Turn head slowly to your RIGHT', 
-    // STRICT YAW: 75 to 95 degrees (Magnitude > 75).
-    // LOOSE PITCH: -30 to +50.
     target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
     guideType: 'face'
   },
@@ -42,8 +37,6 @@ const SCAN_STEPS = [
     id: 'top',
     label: 'Top View',
     instruction: 'Tilt head DOWN to show crown',
-    // STRICT PITCH: 80 to 100 degrees (90 +/- 10).
-    // Tightened tolerance to ensure proper top view capture.
     target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 15, pitchTolerance: 10 },
     guideType: 'face'
   },
@@ -55,6 +48,22 @@ const SCAN_STEPS = [
     guideType: 'manual'
   },
 ];
+
+// Helper to load external scripts dynamically
+const loadScript = (src) => {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.crossOrigin = "anonymous";
+    script.onload = () => resolve();
+    script.onerror = (err) => reject(err);
+    document.body.appendChild(script);
+  });
+};
 
 // Simple Range Slider Component
 const RangeControl = ({ icon: Icon, label, value, onChange, min = 0, max = 200 }) => (
@@ -90,18 +99,20 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   // Camera Settings
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
-  const [activeOverlay, setActiveOverlay] = useState('hairline'); // 'none', 'density', 'hairline', 'roots'
+  const [activeOverlay, setActiveOverlay] = useState('hairline'); 
   const [showSettings, setShowSettings] = useState(false);
 
   // Tracking State
   const [pose, setPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
   const [quality, setQuality] = useState({ lighting: 'good', stability: 'stable', faceDetected: false });
-  const [status, setStatus] = useState('searching'); // searching, aligning, locked, capturing
+  const [status, setStatus] = useState('searching'); 
   const [scanProgress, setScanProgress] = useState(0);
   
-  // Ref to hold the latest onResults callback
+  // Refs
   const onResultsRef = useRef(null);
   const isMountedRef = useRef(true);
+  const faceMeshRef = useRef(null);
+  const cameraRef = useRef(null);
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
@@ -110,6 +121,12 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      if (cameraRef.current) {
+        try { cameraRef.current.stop(); } catch(e) {}
+      }
+      if (faceMeshRef.current) {
+        try { faceMeshRef.current.close(); } catch(e) {}
+      }
     };
   }, []);
 
@@ -213,44 +230,74 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
   }, [currentStep, scanProgress, status]);
 
+  // Update ref for callback
   useEffect(() => {
     onResultsRef.current = onResults;
   }, [onResults]);
 
+  // Initialize MediaPipe and Camera via CDN scripts
   useEffect(() => {
-    const faceMesh = new FaceMesh({locateFile: (file) => {
-      return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`;
-    }});
+    const initMediaPipe = async () => {
+      try {
+        // Load scripts dynamically to avoid build errors
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
 
-    faceMesh.setOptions({
-      maxNumFaces: 1,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
+        if (!window.FaceMesh || !window.Camera) {
+          throw new Error('MediaPipe failed to load');
+        }
 
-    faceMesh.onResults((results) => {
-      if (onResultsRef.current) {
-        onResultsRef.current(results);
+        const faceMesh = new window.FaceMesh({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`;
+          }
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults((results) => {
+          if (onResultsRef.current) {
+            onResultsRef.current(results);
+          }
+        });
+
+        faceMeshRef.current = faceMesh;
+
+        if (videoRef.current) {
+          const camera = new window.Camera(videoRef.current, {
+            onFrame: async () => {
+              if (faceMeshRef.current) {
+                await faceMeshRef.current.send({image: videoRef.current});
+              }
+            },
+            width: 1280,
+            height: 720
+          });
+          
+          camera.start();
+          cameraRef.current = camera;
+        }
+
+      } catch (error) {
+        console.error("Error initializing MediaPipe:", error);
+        toast({
+          title: "Camera Error",
+          description: "Could not start AI camera. Please check permissions.",
+          variant: "destructive"
+        });
       }
-    });
+    };
 
-    if (videoRef.current) {
-      const camera = new Camera(videoRef.current, {
-        onFrame: async () => {
-          await faceMesh.send({image: videoRef.current});
-        },
-        width: 1280,
-        height: 720
-      });
-      camera.start();
-      return () => {
-        camera.stop();
-        faceMesh.close();
-      };
-    }
-  }, []); 
+    initMediaPipe();
 
+  }, [toast]);
+
+  // Capture logic
   useEffect(() => {
     if (scanProgress >= 100 && status !== 'capturing') {
       handleCapture();
