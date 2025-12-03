@@ -4,8 +4,8 @@ import {
   Camera as CameraIcon, RefreshCw, X, User, Sun, Check, AlertCircle,
   SlidersHorizontal, Layers, Activity, Droplets, Sparkles
 } from 'lucide-react';
-// Import path fixed to include 'src' explicitly due to alias resolution issues
-import { useToast } from '@/src/components/ui/use-toast';
+// Import path fixed to relative to avoid alias issues
+import { useToast } from './ui/use-toast';
 
 // MediaPipe imports removed to prevent build errors.
 // We will load them dynamically from CDN.
