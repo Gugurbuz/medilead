@@ -4,7 +4,7 @@ import {
   Download, Share2, FileText, Activity, User, Calendar,
   ChevronDown, ChevronUp, Info, CheckCircle2, AlertCircle,
   Stethoscope, Microscope, Layers, ArrowRight, Sparkles,
-  Wand2
+  Wand2, Loader2 // Loader2 eklendi
 } from 'lucide-react';
 // Import paths fixed to relative to avoid alias resolution issues
 import { useToast } from './ui/use-toast';
@@ -21,6 +21,23 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
   const [expandedSection, setExpandedSection] = useState(null);
   const [premiumVisuals, setPremiumVisuals] = useState({});
   const [isProcessingVisuals, setIsProcessingVisuals] = useState(true);
+
+  // Results undefined kontrolü
+  if (!results || !results.analysis) {
+    return (
+      <div className="min-h-screen bg-black text-white p-4 md:p-8 flex flex-col items-center justify-center">
+        <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mb-4" />
+        <h2 className="text-xl font-semibold">Analiz sonuçları yükleniyor...</h2>
+        <p className="text-gray-400 mt-2">Lütfen bekleyin, veriler işleniyor.</p>
+        <button 
+          onClick={onRestart}
+          className="mt-8 px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
+        >
+          Ana Sayfaya Dön
+        </button>
+      </div>
+    );
+  }
 
   const { analysis, photos, timestamp } = results;
 
@@ -111,11 +128,11 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
           <div className="flex items-center gap-4 text-sm text-gray-400">
             <span className="flex items-center gap-1">
               <User className="w-4 h-4" />
-              {patientData.name}
+              {patientData?.name || 'Misafir Kullanıcı'}
             </span>
             <span className="flex items-center gap-1">
               <Calendar className="w-4 h-4" />
-              {new Date(timestamp).toLocaleDateString('tr-TR')}
+              {timestamp ? new Date(timestamp).toLocaleDateString('tr-TR') : new Date().toLocaleDateString('tr-TR')}
             </span>
           </div>
         </div>
@@ -175,7 +192,7 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
             className="overflow-hidden"
           >
             <div className="p-4 border-t border-white/10 space-y-3">
-              {analysis.detailedObservations.map((observation, index) => (
+              {analysis.detailedObservations && analysis.detailedObservations.map((observation, index) => (
                 <div key={index} className="flex items-start gap-3 bg-white/5 p-3 rounded-lg">
                   <Info className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />
                   <p className="text-gray-300 text-sm">{observation}</p>
@@ -246,12 +263,12 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
               
               {isProcessingVisuals ? (
                   <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-4"></div>
+                      <Loader2 className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-4" />
                       <p>Görseller işleniyor ve optimize ediliyor...</p>
                   </div>
               ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {photos.map((photo) => (
+                    {photos && photos.map((photo) => (
                       <div key={photo.id} className="relative group rounded-xl overflow-hidden border border-white/10 bg-black shadow-lg">
                         <div className="aspect-[4/5] relative">
                           <img
@@ -287,7 +304,7 @@ const AnalysisReport = ({ results, patientData, onRestart }) => {
 
             <DetailedObservations />
 
-            {analysis.recommendations.length > 0 && (
+            {analysis.recommendations && analysis.recommendations.length > 0 && (
               <div className="bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 p-6 rounded-2xl mt-6">
                 <div className="flex items-start gap-4">
                   <div className="p-3 bg-indigo-600/20 rounded-lg">
