@@ -4,7 +4,7 @@ import {
   Camera as CameraIcon, RefreshCw, X, User, Sun, Check, AlertCircle,
   SlidersHorizontal, Layers, Activity, Droplets, Sparkles
 } from 'lucide-react';
-// Import path fixed to relative to avoid alias issues
+// Import path fixed to relative to avoid alias issues if @ alias fails in some contexts
 import { useToast } from './ui/use-toast';
 
 // MediaPipe imports removed to prevent build errors.
@@ -14,36 +14,38 @@ import { useToast } from './ui/use-toast';
 const SCAN_STEPS = [
   { 
     id: 'front', 
-    label: 'Front View', 
-    instruction: 'Look directly at camera', 
+    label: 'Ön Görünüm', 
+    instruction: 'Doğrudan kameraya bakın', 
     target: { yaw: 0, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 20 }, 
     guideType: 'face'
   },
   { 
     id: 'left', 
-    label: 'Right Profile', 
-    instruction: 'Turn head slowly to your LEFT', 
-    target: { yaw: -85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
+    label: 'Sağ Profil', 
+    instruction: 'Başınızı yavaşça SOLA çevirin', 
+    target: { yaw: -85, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 40 }, 
     guideType: 'face'
   },
   { 
     id: 'right', 
-    label: 'Left Profile', 
-    instruction: 'Turn head slowly to your RIGHT', 
-    target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
+    label: 'Sol Profil', 
+    instruction: 'Başınızı yavaşça SAĞA çevirin', 
+    target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 40 }, 
     guideType: 'face'
   },
   {
     id: 'top',
-    label: 'Top View',
-    instruction: 'Tilt head DOWN to show crown',
-    target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 15, pitchTolerance: 10 },
-    guideType: 'face'
+    label: 'Tepe Görünümü',
+    instruction: 'Başınızı ÖNE eğerek tepeyi gösterin',
+    // Top view is tricky for face detection. We set guideType to 'manual' or handle it specifically.
+    // Setting to manual to avoid "No Face Detected" errors when looking down.
+    target: null,
+    guideType: 'manual' 
   },
   { 
     id: 'back', 
-    label: 'Donor Area', 
-    instruction: 'Turn around (Back of Head)', 
+    label: 'Donör Bölge (Ense)', 
+    instruction: 'Arkanızı dönün', 
     target: null, 
     guideType: 'manual'
   },
@@ -168,14 +170,18 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
 
-    // 1. Back View Handling
+    // 1. Manual Handling (Back & Top Views)
+    // "Top" view also triggers this logic now, skipping face detection requirement
     if (currentStep.guideType === 'manual') {
       setIsModelLoaded(true);
+      // For Top/Back view, we don't strictly require face detection to lock
+      // But we still track if a face is present just for info
       setQuality(prev => ({ ...prev, faceDetected: hasFace, stability: 'stable' }));
       
       const canvas = canvasRef.current;
       if (canvas) {
          const ctx = canvas.getContext('2d');
+         // Use smaller dimensions for performance during analysis
          canvas.width = 100; canvas.height = 100;
          ctx.drawImage(results.image, 0, 0, 100, 100);
          const imageData = ctx.getImageData(0, 0, 100, 100);
@@ -186,18 +192,28 @@ const LiveScanner = ({ onComplete, onCancel }) => {
          const lighting = totalBrightness < 40 ? 'dark' : totalBrightness > 230 ? 'bright' : 'good';
          setQuality(q => ({ ...q, lighting }));
          
-         if (lighting === 'good' && !hasFace) {
-             setStatus('locked');
-             setScanProgress(prev => Math.min(prev + 5, 100));
-         } else {
+         // For BACK view: we prefer NO face.
+         // For TOP view: we might see a face looking down, or no face. Both are fine.
+         // Simplified logic: If lighting is good, we lock.
+         
+         if (currentStep.id === 'back' && hasFace) {
+             // If capturing back and face is detected -> warning
+             setStatus('aligning');
              setScanProgress(prev => Math.max(0, prev - 10));
-             if (hasFace) setStatus('aligning');
+         } else {
+             // For TOP view or BACK view (without face), proceed
+             if (lighting === 'good') {
+                 setStatus('locked');
+                 setScanProgress(prev => Math.min(prev + 5, 100));
+             } else {
+                 setScanProgress(prev => Math.max(0, prev - 5));
+             }
          }
       }
       return;
     }
 
-    // 2. FaceMesh Handling
+    // 2. FaceMesh Handling (Front, Left, Right)
     if (!hasFace) {
       setQuality(prev => ({ ...prev, faceDetected: false }));
       setStatus('searching');
@@ -286,8 +302,8 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       } catch (error) {
         console.error("Error initializing MediaPipe:", error);
         toast({
-          title: "Camera Error",
-          description: "Could not start AI camera. Please check permissions.",
+          title: "Kamera Hatası",
+          description: "AI kamera başlatılamadı. Lütfen izinleri kontrol edin.",
           variant: "destructive"
         });
       }
@@ -305,12 +321,16 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   }, [scanProgress, status]);
 
   const validateCapture = (currentPose, step, currentQuality) => {
-    if (step.id === 'back') {
-      if (currentQuality.faceDetected) return { valid: false, message: "Face detected! Please turn around." };
-      return { valid: true };
+    // Manual steps (Back & Top) don't strictly require face detection logic for validation
+    if (step.guideType === 'manual') {
+        if (step.id === 'back' && currentQuality.faceDetected) {
+            return { valid: false, message: "Yüz algılandı! Lütfen arkanızı dönün." };
+        }
+        // Top view is lenient
+        return { valid: true };
     }
 
-    if (!currentQuality.faceDetected) return { valid: false, message: "Face not detected." };
+    if (!currentQuality.faceDetected) return { valid: false, message: "Yüz algılanamadı." };
 
     const { target } = step;
     const yawTolerance = target.yawTolerance || target.tolerance || 15;
@@ -320,13 +340,13 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const pitchDiff = currentPose.pitch - target.pitch;
 
     if (Math.abs(yawDiff) > yawTolerance) {
-      const correction = yawDiff > 0 ? "Turn head Left" : "Turn head Right";
-      return { valid: false, message: `Incorrect Angle: ${correction}` };
+      const correction = yawDiff > 0 ? "Başınızı SOLA çevirin" : "Başınızı SAĞA çevirin";
+      return { valid: false, message: `Açı Hatalı: ${correction}` };
     }
 
     if (Math.abs(pitchDiff) > pitchTolerance) {
-       const correction = pitchDiff > 0 ? "Look Up" : "Look Down"; 
-       return { valid: false, message: `Incorrect Tilt: ${correction}` };
+       const correction = pitchDiff > 0 ? "Yukarı Bakın" : "Aşağı Bakın"; 
+       return { valid: false, message: `Eğim Hatalı: ${correction}` };
     }
 
     return { valid: true };
@@ -338,7 +358,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const validation = validateCapture(pose, currentStep, quality);
     if (!validation.valid) {
       toast({
-        title: "Capture Rejected",
+        title: "Çekim Reddedildi",
         description: validation.message,
         variant: "destructive",
         duration: 3000,
@@ -356,6 +376,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     canvas.height = video.videoHeight * scale;
     const ctx = canvas.getContext('2d');
 
+    // Apply filters visually
     ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
 
     ctx.translate(canvas.width, 0);
@@ -365,8 +386,8 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
 
     toast({
-      title: "Photo Captured",
-      description: `${currentStep.label} captured successfully`,
+      title: "Fotoğraf Çekildi",
+      description: `${currentStep.label} başarıyla alındı`,
       duration: 1500,
     });
 
@@ -403,7 +424,6 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
   // --- Overlays Render ---
   const renderOverlay = () => {
-    // Using CSS classes for overlay visuals
     switch (activeOverlay) {
       case 'density':
         return (
@@ -475,9 +495,10 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         <div className="pointer-events-auto">
           <div className="flex items-center gap-2 mb-1">
              <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-medium tracking-wider uppercase">
-               Step {currentStepIndex + 1}/{SCAN_STEPS.length}
+               Adım {currentStepIndex + 1}/{SCAN_STEPS.length}
              </span>
-             {quality.faceDetected && status !== 'searching' && currentStep.guideType !== 'manual' && (
+             {/* Only show angle indicators for face-guided steps */}
+             {quality.faceDetected && status !== 'searching' && currentStep.guideType === 'face' && (
                <div className="flex gap-4 ml-4 bg-black/50 backdrop-blur-sm p-2 rounded-lg border border-white/10">
                  <AngleIndicator 
                     label="Yaw" 
@@ -504,7 +525,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         </button>
       </div>
 
-      {/* Settings Toggle (Top Right, Below Close) */}
+      {/* Settings Toggle */}
       <div className="absolute top-20 right-6 z-30 flex flex-col gap-2">
         <button 
            onClick={() => setShowSettings(!showSettings)}
@@ -525,17 +546,17 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           >
             <div className="space-y-3">
               <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Activity className="w-3 h-3" /> Camera Settings
+                <Activity className="w-3 h-3" /> Kamera Ayarları
               </h4>
               <RangeControl 
                 icon={Sun} 
-                label="Brightness" 
+                label="Parlaklık" 
                 value={brightness} 
                 onChange={setBrightness} 
               />
               <RangeControl 
                 icon={Sparkles} 
-                label="Clarity" 
+                label="Netlik" 
                 value={contrast} 
                 onChange={setContrast} 
               />
@@ -545,13 +566,13 @@ const LiveScanner = ({ onComplete, onCancel }) => {
 
             <div className="space-y-3">
               <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Layers className="w-3 h-3" /> Analysis Overlay
+                <Layers className="w-3 h-3" /> Analiz Katmanı
               </h4>
               <div className="grid grid-cols-3 gap-2">
                  {[
-                   { id: 'hairline', icon: User, label: 'Hairline' },
-                   { id: 'density', icon: Activity, label: 'Heatmap' },
-                   { id: 'roots', icon: Droplets, label: 'Follicles' }
+                   { id: 'hairline', icon: User, label: 'Saç Çizgisi' },
+                   { id: 'density', icon: Activity, label: 'Yoğunluk' },
+                   { id: 'roots', icon: Droplets, label: 'Kökler' }
                  ].map((mode) => (
                    <button
                      key={mode.id}
@@ -577,7 +598,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         {!isModelLoaded && currentStep.guideType !== 'manual' && (
           <div className="absolute z-30 flex flex-col items-center text-white/70">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
-            <p>Initializing FaceMesh...</p>
+            <p>FaceMesh Başlatılıyor...</p>
           </div>
         )}
 
@@ -618,20 +639,21 @@ const LiveScanner = ({ onComplete, onCancel }) => {
                 </AnimatePresence>
 
                 {/* Alerts */}
-                {!quality.faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && (
+                {!quality.faceDetected && currentStep.guideType === 'face' && isModelLoaded && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20">
                     <User className="w-16 h-16 text-white/50 mb-2" />
                     <span className="bg-red-500/80 text-white px-3 py-1 rounded-full text-sm font-bold">
-                      No Face Detected
+                      Yüz Algılanamadı
                     </span>
                   </div>
                 )}
                 
-                {quality.faceDetected && currentStep.guideType === 'manual' && (
+                {/* Alert for Back view if face is detected (only for back view) */}
+                {quality.faceDetected && currentStep.id === 'back' && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20">
                     <AlertCircle className="w-16 h-16 text-red-500 mb-2" />
                     <span className="bg-red-500/90 text-white px-3 py-1 rounded-full text-sm font-bold text-center">
-                      Face Detected!<br/>Turn Around
+                      Yüz Algılandı!<br/>Arkanızı Dönün
                     </span>
                   </div>
                 )}
@@ -647,14 +669,14 @@ const LiveScanner = ({ onComplete, onCancel }) => {
                className="inline-block bg-black/60 backdrop-blur-md px-6 py-3 rounded-2xl border border-white/10"
              >
                <h3 className="text-xl font-bold text-white">{currentStep.instruction}</h3>
-               {status === 'aligning' && currentStep.guideType !== 'manual' && (
+               {status === 'aligning' && currentStep.guideType === 'face' && (
                  <p className="text-amber-300 text-sm mt-1 font-medium">
-                    Adjust angle to match guides
+                    Açıyı kılavuzlara göre ayarlayın
                  </p>
                )}
                {status === 'locked' && (
                  <p className="text-green-400 text-sm mt-1 font-bold tracking-wider animate-pulse">
-                    PERFECT - HOLD STILL
+                    MÜKEMMEL - SABİT DURUN
                  </p>
                )}
              </motion.div>
@@ -663,7 +685,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
              <div className="flex justify-center gap-2 mt-2">
                {quality.lighting === 'dark' && (
                  <div className="bg-red-500/90 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
-                   <Sun className="w-3 h-3" /> Low Light
+                   <Sun className="w-3 h-3" /> Düşük Işık
                  </div>
                )}
              </div>
