@@ -103,50 +103,45 @@ export const analyzeHairImages = async (photos, patientData) => {
     };
   });
 
-  // GÜNCELLENMİŞ GÜÇLÜ PROMPT
-  const prompt = `Act as an expert hair transplant surgeon. Analyze these ${photos.length} patient photos for a detailed hair loss assessment.
+  const prompt = `You are an expert hair restoration surgeon analyzing these ${photos.length} photos for hair loss assessment.
 
-Patient Profile:
+Patient Information:
 - Age: ${patientData.age}
 - Gender: ${patientData.gender}
-- History: ${patientData.hairLossDuration}
+- Hair Loss Pattern: ${patientData.hairLossPattern}
+- Duration: ${patientData.hairLossDuration}
 - Family History: ${patientData.familyHistory}
 
-PERFORM A STRICT VISUAL DENSITY ANALYSIS:
-Look closely at the scalp visibility in each region.
-- If scalp is clearly visible through hair, density is < 50%.
-- If scalp is completely invisible, density is > 80%.
-- If there is no hair (bald), density is 0-10%.
+Photo angles provided: ${photos.map(p => p.type).join(', ')}
 
-Provide a JSON response with the following exact structure (no markdown):
+Provide a comprehensive analysis in JSON format (no markdown, no backticks):
 {
-  "overallScore": number (1-10, strict evaluation),
-  "hairLossStage": "Norwood Scale classification (e.g. III-Vertex, IV, V)",
+  "overallScore": number (1-10, where 1=severe loss, 10=minimal loss),
+  "hairLossStage": "Norwood Scale classification",
   "hairDensity": {
-    "frontal": number (0-100, estimate based on frontal view),
-    "crown": number (0-100, estimate based on top/back view),
-    "temporal": number (0-100, estimate based on side views),
-    "donor": number (0-100, estimate based on back view quality)
+    "frontal": number (0-100),
+    "crown": number (0-100),
+    "temporal": number (0-100),
+    "donor": number (0-100)
   },
   "recessionPattern": {
     "frontalRecession": "none/mild/moderate/severe",
     "crownThinning": "none/mild/moderate/severe",
     "templeRecession": "none/mild/moderate/severe"
   },
-  "donorQuality": "Excellent/Good/Fair/Poor (assess thickness and density of donor area)",
-  "estimatedGrafts": "Realistic range (e.g. 2500-3000)",
+  "donorQuality": "Excellent/Good/Fair/Poor",
+  "estimatedGrafts": "Range estimate (e.g., 1500-2000)",
   "detailedObservations": [
-    "Specific observation about hairline status",
-    "Specific observation about crown thinning",
-    "Specific observation about donor area health",
-    "Any signs of inflammation or scarring if visible"
+    "Observation 1",
+    "Observation 2",
+    "Observation 3"
   ],
   "recommendations": [
     {
-      "title": "Medical or Surgical option",
+      "title": "Treatment name",
       "priority": "high/medium/low",
-      "description": "Why this is recommended for this specific patient",
-      "details": ["Dosage or procedure detail", "Expected timeframe"]
+      "description": "Detailed description",
+      "details": ["Detail 1", "Detail 2", "Detail 3"]
     }
   ]
 }`;
@@ -165,7 +160,7 @@ Provide a JSON response with the following exact structure (no markdown):
           ]
         }],
         generationConfig: {
-          temperature: 0.2, // Lower temperature for more consistent/analytical results
+          temperature: 0.4,
           topK: 40,
           topP: 0.95,
           maxOutputTokens: 2048,
@@ -202,28 +197,63 @@ export const analyzeHairlineCoordinates = async (imageDataUrl) => {
 
   const { base64Data, mimeType } = convertImageToBase64(imageDataUrl);
 
-  const prompt = `Analyze the hairline in this image.
-  Identify the current hairline path coordinates (x,y) from left temple to right temple.
-  Return JSON: { "hairlinePoints": [{"x": %, "y": %}, ...] }`;
+  const prompt = `Analyze the hairline in this image and provide coordinates for visualization.
+
+Return ONLY a JSON object (no markdown):
+{
+  "hairlinePoints": [
+    {"x": number (0-100), "y": number (0-100)},
+    ... (5-10 points mapping the hairline)
+  ],
+  "recessionAreas": [
+    {"x": number, "y": number, "severity": "mild/moderate/severe"}
+  ]
+}
+
+Coordinates should be percentages (0-100) of image dimensions.`;
 
   try {
     const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: base64Data } }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 500 }
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Data
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 500,
+        }
       })
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return null;
+    }
+
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
-    
-    return JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!resultText) {
+      return null;
+    }
+
+    const cleanedText = resultText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const result = JSON.parse(cleanedText);
+
+    return result;
   } catch (error) {
-    console.error('Hairline analysis error:', error);
+    console.error('Hairline coordinate analysis error:', error);
     return null;
   }
 };
