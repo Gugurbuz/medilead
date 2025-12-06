@@ -1,25 +1,18 @@
+
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar as CalendarIcon, Clock, CheckCircle2 } from 'lucide-react';
+import { X, Calendar as CalendarIcon, Clock, CheckCircle2, ChevronRight, User, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-// Props için Interface
-interface ConsultationBookingProps {
-  isOpen: boolean;
-  onClose: () => void;
-}
-
-type BookingStep = 'date' | 'success';
-
-const ConsultationBooking: React.FC<ConsultationBookingProps> = ({ isOpen, onClose }) => {
-  const [step, setStep] = useState<BookingStep>('date');
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [availableDates, setAvailableDates] = useState<Date[]>([]);
+const ConsultationBooking = ({ isOpen, onClose }) => {
+  const [step, setStep] = useState('date'); // date, details, success
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedTime, setSelectedTime] = useState(null);
+  const [availableDates, setAvailableDates] = useState([]);
 
   // Generate next 14 days
   useEffect(() => {
-    const days: Date[] = [];
+    const days = [];
     const today = new Date();
     for (let i = 1; i <= 14; i++) {
       const date = new Date(today);
@@ -29,7 +22,6 @@ const ConsultationBooking: React.FC<ConsultationBookingProps> = ({ isOpen, onClo
         days.push(date);
       }
     }
-    
     setAvailableDates(days.slice(0, 10)); // Show next 10 business days
   }, []);
 
