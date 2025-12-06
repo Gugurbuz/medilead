@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { Helmet } from 'react-helmet';
+import { Helmet } from 'react-helmet-async';
 import { Toaster } from '@/components/ui/toaster';
 import PatientDashboard from '@/components/PatientDashboard';
 
