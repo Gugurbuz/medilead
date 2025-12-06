@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Camera as CameraIcon, RefreshCw, X, User, Sun, Check, AlertCircle,
-  SlidersHorizontal, ChevronLeft, ChevronRight, Zap
+  Camera as CameraIcon, RefreshCw, X, Check,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -146,13 +145,16 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const [guidanceMessage, setGuidanceMessage] = useState("");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [showManualButton, setShowManualButton] = useState(false);
-  const [manualTimer, setManualTimer] = useState<NodeJS.Timeout | null>(null);
-
-  // Refs
+  
+  // Refs (Zamanlayıcı ve Kilitler)
   const faceMeshRef = useRef<any>(null);
   const isMountedRef = useRef(true);
   const lastProcessTimeRef = useRef(0);
+  const manualTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isCapturingRef = useRef(false); // Çift tıklama koruması
 
+  // Güvenlik kontrolü: Eğer index dışına çıkılırsa crash olmasını engelle
   const currentStep = SCAN_STEPS[currentStepIndex];
 
   // --- INIT & CLEANUP ---
@@ -160,7 +162,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     isMountedRef.current = true;
     startCamera();
     
-    // Manuel butonu göstermek için zamanlayıcı (UX Fallback)
     startManualButtonTimer();
 
     return () => {
@@ -169,25 +170,30 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       if (faceMeshRef.current) {
         try { faceMeshRef.current.close(); } catch(e) {}
       }
-      if (manualTimer) clearTimeout(manualTimer);
+      if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     };
   }, []);
 
-  // Adım değiştiğinde
+  // Adım değiştiğinde resetleme
   useEffect(() => {
     setStatus('searching');
     setGuidanceMessage("");
     setCountdown(null);
     setShowManualButton(false);
+    isCapturingRef.current = false; // Kilidi aç
+    
+    // Önceki zamanlayıcıları temizle
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    
     startManualButtonTimer();
   }, [currentStepIndex]);
 
   const startManualButtonTimer = () => {
-    if (manualTimer) clearTimeout(manualTimer);
-    const timer = setTimeout(() => {
+    if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+    manualTimerRef.current = setTimeout(() => {
       if (isMountedRef.current) setShowManualButton(true);
-    }, 8000); // 8 saniye boyunca kilitlenemezse manuel butonu göster
-    setManualTimer(timer);
+    }, 8000); 
   };
 
   // --- CAMERA LOGIC ---
@@ -255,7 +261,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     if (!isMountedRef.current) return;
     
     const now = Date.now();
-    // FPS Limitleme (30 FPS max) - CPU'yu korur
+    // FPS Limitleme (30 FPS max)
     if (now - lastProcessTimeRef.current > 33 && videoRef.current && faceMeshRef.current) {
       try {
          await faceMeshRef.current.send({ image: videoRef.current });
@@ -278,10 +284,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     };
 
     const faceWidth = Math.abs(rightCheek.x - leftCheek.x);
-    // Yaw: Burun merkezden ne kadar uzakta?
+    // Yaw
     const yaw = -((nose.x - midEyes.x) / faceWidth) * 200;
     
-    // Pitch: Burun göz hizasına göre nerede?
+    // Pitch
     const faceHeight = Math.abs(landmarks[14].y - midEyes.y);
     const pitch = ((nose.y - midEyes.y) / faceHeight - 0.4) * 150;
 
@@ -290,13 +296,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   // --- MAIN LOOP RESULT HANDLER ---
   const onResults = useCallback((results: any) => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || !currentStep) return;
     setIsModelLoaded(true);
 
-    // Eğer geri sayım veya çekim yapılıyorsa analizi durdur (performans için)
+    // Eğer geri sayım veya çekim yapılıyorsa analizi durdur
     if (status === 'countdown' || status === 'capturing') return;
 
-    // 1. Manuel Adımlar (Face Detection Gerekmez)
+    // 1. Manuel Adımlar
     if (currentStep.guideType === 'manual') {
       setStatus('locked');
       setGuidanceMessage("Konumunuzu ayarlayıp bekleyin");
@@ -331,7 +337,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     } else {
       setStatus('aligning');
       
-      // UX: Kullanıcıya ne yapması gerektiğini söyle
       if (!isYawGood) {
         if (yawDiff > 0) setGuidanceMessage("Başınızı hafifçe SOLA çevirin");
         else setGuidanceMessage("Başınızı hafifçe SAĞA çevirin");
@@ -343,30 +348,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   }, [currentStep, status]);
 
-  // --- COUNTDOWN & CAPTURE ---
-  const startCountdown = useCallback(() => {
-    if (status === 'countdown' || status === 'capturing') return;
-    
-    setStatus('countdown');
-    setCountdown(3);
-
-    let count = 3;
-    const interval = setInterval(() => {
-      count--;
-      if (count > 0) {
-        setCountdown(count);
-      } else {
-        clearInterval(interval);
-        setCountdown(null);
-        handleCapture();
-      }
-    }, 1000);
-
-    // Eğer kullanıcı hareket ederse iptal et (opsiyonel - şimdilik iptal etmiyoruz, UX daha akıcı olsun)
-  }, [status]);
-
+  // --- CAPTURE HANDLER ---
   const handleCapture = useCallback(() => {
-    if (!videoRef.current) return;
+    // Çift tıklama ve bellek sızıntısı koruması
+    if (!videoRef.current || isCapturingRef.current) return;
+    if (!currentStep) return;
+
+    isCapturingRef.current = true; // KİLİTLE
     setStatus('capturing');
 
     const video = videoRef.current;
@@ -400,14 +388,44 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
       // Next Step
       setTimeout(() => {
-        if (currentStepIndex < SCAN_STEPS.length - 1) {
-          setCurrentStepIndex(prev => prev + 1);
-        } else {
-          onComplete([...capturedImages, newPhoto]);
+        if (isMountedRef.current) {
+          if (currentStepIndex < SCAN_STEPS.length - 1) {
+            setCurrentStepIndex(prev => prev + 1);
+          } else {
+            onComplete([...capturedImages, newPhoto]);
+          }
         }
       }, 1000);
     }
   }, [currentStep, currentStepIndex, capturedImages, onComplete, toast]);
+
+  // --- COUNTDOWN LOGIC ---
+  const startCountdown = useCallback(() => {
+    if (status === 'countdown' || status === 'capturing') return;
+    if (isCapturingRef.current) return; // Eğer zaten yakalama modundaysa sayım başlatma
+    
+    setStatus('countdown');
+    setCountdown(3);
+
+    let count = 3;
+    
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+
+    countdownIntervalRef.current = setInterval(() => {
+      count--;
+      if (count > 0) {
+        setCountdown(count);
+      } else {
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        setCountdown(null);
+        handleCapture();
+      }
+    }, 1000);
+
+  }, [status, handleCapture]);
+
+  // CRITICAL FIX: Eğer step undefined ise (index out of bounds) render etme
+  if (!currentStep) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black text-white flex flex-col overflow-hidden">
