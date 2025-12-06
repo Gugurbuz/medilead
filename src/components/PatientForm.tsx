@@ -1,13 +1,39 @@
-
-import React, { useState } from 'react';
+import React, { useState, ChangeEvent, FormEvent } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 
-const PatientForm = ({ onSubmit, existingData = null, photos }) => {
+// Tip Tanımları (Interfaces)
+interface Lifestyle {
+  stress: string;
+  diet: string;
+  smoking: string;
+}
+
+interface PatientData {
+  age: string;
+  gender: string;
+  hairLossDuration: string;
+  familyHistory: string;
+  previousTreatments: string;
+  medications: string;
+  lifestyle: Lifestyle;
+  goals: string;
+  // Dinamik erişim için index signature
+  [key: string]: string | Lifestyle | any; 
+}
+
+interface PatientFormProps {
+  onSubmit: (data: PatientData) => void;
+  existingData?: PatientData | null;
+  photos?: any[]; // Fotoğraf objesinin yapısı belliyse burayı detaylandırabilirsin
+}
+
+const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null, photos }) => {
   const { toast } = useToast();
-  const [formData, setFormData] = useState(existingData || {
+  
+  const [formData, setFormData] = useState<PatientData>(existingData || {
     age: '',
     gender: '',
     hairLossDuration: '',
@@ -22,23 +48,24 @@ const PatientForm = ({ onSubmit, existingData = null, photos }) => {
     goals: ''
   });
 
-  const handleChange = (e) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
+    
     if (name.includes('.')) {
       const [parent, child] = name.split('.');
-      setFormData({
-        ...formData,
+      setFormData(prev => ({
+        ...prev,
         [parent]: {
-          ...formData[parent],
+          ...(prev[parent] as Lifestyle),
           [child]: value
         }
-      });
+      }));
     } else {
-      setFormData({ ...formData, [name]: value });
+      setFormData(prev => ({ ...prev, [name]: value }));
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
 
     if (!formData.age || !formData.gender || !formData.hairLossDuration) {
@@ -157,7 +184,7 @@ const PatientForm = ({ onSubmit, existingData = null, photos }) => {
               name="previousTreatments"
               value={formData.previousTreatments}
               onChange={handleChange}
-              rows="3"
+              rows={3}
               className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
               placeholder="E.g., Minoxidil, Finasteride, PRP therapy..."
             />
@@ -172,7 +199,7 @@ const PatientForm = ({ onSubmit, existingData = null, photos }) => {
               name="medications"
               value={formData.medications}
               onChange={handleChange}
-              rows="2"
+              rows={2}
               className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
               placeholder="List any medications you're currently taking..."
             />
@@ -248,7 +275,7 @@ const PatientForm = ({ onSubmit, existingData = null, photos }) => {
               name="goals"
               value={formData.goals}
               onChange={handleChange}
-              rows="3"
+              rows={3}
               className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
               placeholder="What are you hoping to achieve with treatment?"
             />
