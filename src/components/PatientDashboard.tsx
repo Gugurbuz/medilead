@@ -1,9 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Camera, Loader2, FileText, X, Activity, User, Calendar } from 'lucide-react';
-import { processHairImage, type HairAnalysisResult } from '../services/visionModel';
-
-// UI Components (Genellikle ayrı dosyalardadır ama tam bağlam için burada mock olarak import edildi varsayıyoruz
-// veya inline olarak kullanıyoruz. Burada önemli olan mantık akışıdır.)
+import { Camera, Loader2, FileText, X, Activity, User } from 'lucide-react';
+// DÜZELTME: Dosya yolu projenizdeki mevcut yapıya (src/lib) göre güncellendi.
+import { processHairImage, type HairAnalysisResult } from '../lib/visionModel';
 
 interface PatientData {
   name: string;
@@ -79,8 +77,7 @@ export default function PatientDashboard() {
     setAnalysisResult(null);
 
     try {
-      // processHairImage fonksiyonuna artık doğrudan File objesini gönderebiliriz.
-      // visionModel.ts içindeki güncelleme sayesinde bu artık hata vermeyecek.
+      // processHairImage fonksiyonu src/lib/visionModel.ts içinden çağrılıyor
       const result = await processHairImage(selectedImage, patientData.complaint);
       setAnalysisResult(result);
     } catch (err) {
@@ -252,7 +249,6 @@ export default function PatientDashboard() {
                   <div>
                     <h4 className="font-semibold text-purple-600">Ürün Tavsiyeleri</h4>
                     <ul className="list-disc pl-5 mt-1 text-gray-700 space-y-1">
-                      {/* DÜZELTME BURADA: 'dismiss' prop'u kaldırıldı veya geçerli bir key eklendi */}
                       {analysisResult.products.map((product, idx) => (
                         <li key={idx} className="text-sm">
                           {product}
