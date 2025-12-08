@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Eğer environment variable yoksa boş string döner (Hata yönetimi için)
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || "";
+// DÜZELTME: Kullanıcının belirttiği doğru çevre değişkeni kullanılıyor
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 
@@ -57,7 +57,8 @@ export const processHairImage = async (
 ): Promise<HairAnalysisResult> => {
   try {
     if (!API_KEY) {
-      throw new Error("Google API Key bulunamadı. Lütfen .env dosyanızı kontrol edin.");
+      console.error("API Key eksik! Lütfen .env dosyasında VITE_GEMINI_API_KEY tanımlı olduğundan emin olun.");
+      throw new Error("Google API Key bulunamadı.");
     }
 
     let imagePart;
