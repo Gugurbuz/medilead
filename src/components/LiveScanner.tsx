@@ -1,60 +1,89 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Camera as CameraIcon, RefreshCw, X, User, Check, Sun, Volume2, VolumeX
+  Camera as CameraIcon, RefreshCw, X, Check,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { Button } from '@/components/ui/button';
-import { FilesetResolver, ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision';
 
-// --- GLOBAL TİPLER ---
-declare global {
-  interface Window {
-    FaceMesh: any;
-    Camera: any;
+const getOrt = () => {
+  const ort = (window as any).ort;
+  if (!ort) {
+    console.error('onnxruntime-web (window.ort) henüz yüklenmemiş');
   }
+  return ort;
+};
+
+// --- TİP VE SABİTLER ---
+
+interface ScanStep {
+  id: string;
+  label: string;
+  instruction: string;
+  subInstruction?: string;
+  target: { yaw: number; pitch: number; roll: number; tolerance: number } | null;
+  guideType: 'face' | 'manual';
+  guideShape: 'oval' | 'circle' | 'rect';
 }
 
-// --- AYARLAR ---
-const SCAN_STEPS = [
+interface CapturedPhoto {
+  id: number;
+  preview: string;
+  type: string;
+  hairAnalysis?: {
+    hairCoverageRatio: number; // 0-1
+    hairCoveragePercent: number; // 0-100
+  };
+}
+
+const SCAN_STEPS: ScanStep[] = [
   { 
     id: 'front', 
-    label: 'Front View', 
-    instruction: 'Look directly at the camera', 
-    target: { yaw: 0, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 20 }, 
-    guideType: 'face'
+    label: 'Ön Görünüm', 
+    instruction: 'Kameraya Düz Bakın', 
+    subInstruction: 'Yüzünüzü çerçevenin ortasına yerleştirin',
+    target: { yaw: 0, pitch: 10, roll: 0, tolerance: 12 }, 
+    guideType: 'face',
+    guideShape: 'oval'
   },
   { 
     id: 'left', 
-    label: 'Right Profile', 
-    instruction: 'Turn your head slowly to the LEFT', 
-    target: { yaw: -85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
-    guideType: 'face'
+    label: 'Sağ Profil', 
+    instruction: 'Başınızı SOLA Çevirin', 
+    subInstruction: 'Kulağınızı görene kadar yavaşça dönün',
+    target: { yaw: -50, pitch: 5, roll: 0, tolerance: 20 }, 
+    guideType: 'face',
+    guideShape: 'oval'
   },
   { 
     id: 'right', 
-    label: 'Left Profile', 
-    instruction: 'Turn your head slowly to the RIGHT', 
-    target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
-    guideType: 'face'
+    label: 'Sol Profil', 
+    instruction: 'Başınızı SAĞA Çevirin', 
+    subInstruction: 'Kulağınızı görene kadar yavaşça dönün',
+    target: { yaw: 50, pitch: 5, roll: 0, tolerance: 20 }, 
+    guideType: 'face',
+    guideShape: 'oval'
   },
-  { 
-    id: 'top', 
-    label: 'Top View', 
-    instruction: 'Tilt your head DOWN', 
-    target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 20, pitchTolerance: 25 }, 
-    guideType: 'face'
+  {
+    id: 'top',
+    label: 'Tepe Görünümü',
+    instruction: 'Başınızı Öne Eğerek Tepeyi Gösterin',
+    subInstruction: 'Saç dipleriniz net görünecek şekilde',
+    target: null,
+    guideType: 'manual',
+    guideShape: 'circle'
   },
   { 
     id: 'back', 
-    label: 'Donor Area', 
-    instruction: 'Turn around (Show back of head)', 
+    label: 'Donör Bölge (Ense)', 
+    instruction: 'Arkanızı Dönün', 
+    subInstruction: 'Ense köklerinizi kameraya tutun',
     target: null, 
-    guideType: 'manual'
+    guideType: 'manual',
+    guideShape: 'rect'
   },
 ];
 
-// --- SCRIPT YÜKLEYİCİ ---
+// Helper: Script Yükleyici (MediaPipe için)
 const loadScript = (src: string) => {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -70,532 +99,635 @@ const loadScript = (src: string) => {
   });
 };
 
+// --- GÖRSEL REHBER BİLEŞENİ (UX) ---
+const GuideOverlay = ({ shape, status }: { shape: string; status: string }) => {
+  const getColor = () => {
+    if (status === 'locked') return '#4ade80'; // Yeşil
+    if (status === 'countdown') return '#4ade80'; // Yeşil
+    if (status === 'aligning') return '#fbbf24'; // Sarı
+    return 'rgba(255, 255, 255, 0.3)'; // Beyaz/Şeffaf
+  };
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-300">
+      <svg width="100%" height="100%" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <mask id="guide-mask">
+            <rect width="100%" height="100%" fill="white" />
+            {shape === 'oval' && (
+              <ellipse cx="200" cy="280" rx="130" ry="170" fill="black" />
+            )}
+            {shape === 'circle' && (
+              <circle cx="200" cy="300" r="140" fill="black" />
+            )}
+            {shape === 'rect' && (
+              <rect x="50" y="150" width="300" height="300" rx="40" fill="black" />
+            )}
+          </mask>
+        </defs>
+
+        {/* Karartılmış Arka Plan (Focus Effect) */}
+        <rect width="100%" height="100%" fill="rgba(0,0,0,0.6)" mask="url(#guide-mask)" />
+
+        {/* Çerçeve Çizgisi */}
+        {shape === 'oval' && (
+          <ellipse
+            cx="200"
+            cy="280"
+            rx="130"
+            ry="170"
+            fill="none"
+            stroke={getColor()}
+            strokeWidth="3"
+            strokeDasharray="10 5"
+          />
+        )}
+        {shape === 'circle' && (
+          <circle
+            cx="200"
+            cy="300"
+            r="140"
+            fill="none"
+            stroke={getColor()}
+            strokeWidth="3"
+            strokeDasharray="10 5"
+          />
+        )}
+        {shape === 'rect' && (
+          <rect
+            x="50"
+            y="150"
+            width="300"
+            height="300"
+            rx="40"
+            fill="none"
+            stroke={getColor()}
+            strokeWidth="3"
+            strokeDasharray="10 5"
+          />
+        )}
+      </svg>
+    </div>
+  );
+};
+
 interface LiveScannerProps {
-  onComplete: (photos: any[]) => void;
+  onComplete: (photos: CapturedPhoto[]) => void;
   onCancel: () => void;
 }
 
 const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null); // FaceMesh Çizimi
-  const hairCanvasRef = useRef<HTMLCanvasElement>(null); // Saç Maskesi
-  const processRef = useRef<HTMLCanvasElement>(null);
   const { toast } = useToast();
 
+  // State
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [capturedImages, setCapturedImages] = useState<any[]>([]);
-  const [isModelLoaded, setIsModelLoaded] = useState(false);
-  
-  // Segmenter'ı state yerine REF olarak tutuyoruz ki Camera callback içinde erişebilelim
-  const segmenterRef = useRef<ImageSegmenter | null>(null);
-  
-  const [pose, setPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
-  const [quality, setQuality] = useState({ lighting: 'good', stability: 'stable', faceDetected: false });
-  const [status, setStatus] = useState<'searching' | 'aligning' | 'locked' | 'capturing'>('searching');
-  const [scanProgress, setScanProgress] = useState(0);
+  const [capturedImages, setCapturedImages] = useState<CapturedPhoto[]>([]);
+  const [isModelLoaded, setIsModelLoaded] = useState(false); // FaceMesh için
 
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [isLowLight, setIsLowLight] = useState(false);
+  // Hair segmentation modeli için state
+  const [isHairModelReady, setIsHairModelReady] = useState(false);
+  const hairSessionRef = useRef<any>(null);
 
-  const onResultsRef = useRef<any>(null);
-  const isMountedRef = useRef(true);
-  const lastSpeakTimeRef = useRef(0);
+  // Logic State
+  const [status, setStatus] = useState<'searching' | 'aligning' | 'locked' | 'countdown' | 'capturing'>('searching');
+  const [guidanceMessage, setGuidanceMessage] = useState('');
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [showManualButton, setShowManualButton] = useState(false);
+
+  // Refs (Zamanlayıcı ve Kilitler)
   const faceMeshRef = useRef<any>(null);
-  const cameraRef = useRef<any>(null);
+  const isMountedRef = useRef(true);
+  const lastProcessTimeRef = useRef(0);
+  const manualTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isCapturingRef = useRef(false); // Çift tıklama koruması
 
+  // Güvenlik kontrolü: Eğer index dışına çıkılırsa crash olmasını engelle
   const currentStep = SCAN_STEPS[currentStepIndex];
 
-  // --- TTS ---
-  const speak = useCallback((text: string, force = false) => {
-    if (!voiceEnabled || !window.speechSynthesis) return;
-    const now = Date.now();
-    if (!force && now - lastSpeakTimeRef.current < 3000) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 1.0;
-    window.speechSynthesis.speak(utterance);
-    lastSpeakTimeRef.current = now;
-  }, [voiceEnabled]);
+  // --- INIT & CLEANUP ---
+  useEffect(() => {
+    isMountedRef.current = true;
+    startCamera();
+    startManualButtonTimer();
+    loadHairModel(); // ONNX saç modeli burada yükleniyor
 
-  // --- SAÇ MASKESİ ÇİZİMİ ---
-  const drawSegmentation = (result: ImageSegmenterResult) => {
-    const canvas = hairCanvasRef.current;
-    if (!canvas || !videoRef.current) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    return () => {
+      isMountedRef.current = false;
+      stopCamera();
+      if (faceMeshRef.current) {
+        try {
+          faceMeshRef.current.close();
+        } catch (e) {}
+      }
+      if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    };
+  }, []);
 
-    const width = videoRef.current.videoWidth;
-    const height = videoRef.current.videoHeight;
+  // Adım değiştiğinde resetleme
+  useEffect(() => {
+    setStatus('searching');
+    setGuidanceMessage('');
+    setCountdown(null);
+    setShowManualButton(false);
+    isCapturingRef.current = false; // Kilidi aç
 
-    // Canvas boyutunu videoya eşitle
-    if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-    }
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
 
-    // Önceki kareyi temizle
-    ctx.clearRect(0, 0, width, height);
+    startManualButtonTimer();
+  }, [currentStepIndex]);
 
-    const mask = result.categoryMask;
-    if (!mask) return;
-
-    const imageData = ctx.createImageData(width, height);
-    const pixels = imageData.data;
-    const maskData = mask.getAsUint8Array();
-
-    // Piksel manipülasyonu (Maviye Boyama)
-    for (let i = 0; i < maskData.length; i++) {
-        if (maskData[i] === 1) { // Kategori 1 = Saç
-            const pIndex = i * 4;
-            pixels[pIndex] = 0;       // R
-            pixels[pIndex + 1] = 100; // G (Hafif cyan tonu ekledim daha parlak olsun)
-            pixels[pIndex + 2] = 255; // B (Mavi)
-            pixels[pIndex + 3] = 160; // Alpha (Görünürlüğü artırmak için 100 -> 160 yaptım)
-        }
-    }
-
-    // Maskeyi kanvasa bas
-    ctx.putImageData(imageData, 0, 0);
+  const startManualButtonTimer = () => {
+    if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+    manualTimerRef.current = setTimeout(() => {
+      if (isMountedRef.current) setShowManualButton(true);
+    }, 8000);
   };
 
-  // --- YÜZ ÇİZGİLERİ (AR) ---
-  const drawHairlineAR = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
-    if (!landmarks) return;
-    
-    const style = { curvature: 0.8, height: 0 }; 
-    const hairlineOffset = 0; 
+  // --- CAMERA LOGIC ---
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user',
+        },
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play();
+          initializeAI();
+        };
+      }
+    } catch (err) {
+      console.error('Camera Error:', err);
+      toast({
+        title: 'Kamera Hatası',
+        description: 'Lütfen kamera izinlerini kontrol edin.',
+        variant: 'destructive',
+      });
+      setShowManualButton(true);
+    }
+  };
 
-    const mid = landmarks[10];
-    const left = landmarks[338];
-    const right = landmarks[297];
+  const stopCamera = () => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  };
 
-    if (!mid || !left || !right) return;
+  // --- FACE MESH AI LOGIC ---
+  const initializeAI = async () => {
+    try {
+      await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
 
-    const mx = mid.x * width;
-    const my = mid.y * height;
-    const lx = left.x * width;
-    const ly = left.y * height;
-    const rx = right.x * width;
-    const ry = right.y * height;
-    const totalOffsetY = - (hairlineOffset * 2) - style.height; 
+      if (!(window as any).FaceMesh) throw new Error('FaceMesh SDK load failed');
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(lx, ly + totalOffsetY + (style.curvature * 20));
-    
-    const cp1x = lx + (mx - lx) * 0.5;
-    const cp1y = ly + totalOffsetY - (style.curvature * 10);
-    const cp2x = rx + (mx - rx) * 0.5;
-    const cp2y = ry + totalOffsetY - (style.curvature * 10);
+      const faceMesh = new (window as any).FaceMesh({
+        locateFile: (file: string) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`,
+      });
 
-    ctx.bezierCurveTo(cp1x, cp1y, mx, my + totalOffsetY, mx, my + totalOffsetY);
-    ctx.bezierCurveTo(mx, my + totalOffsetY, cp2x, cp2y, rx, ry + totalOffsetY + (style.curvature * 20));
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
 
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(74, 222, 128, 0.9)';
-    ctx.setLineDash([5, 5]);
-    ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 6;
-    ctx.stroke();
-    
-    ctx.fillStyle = '#4ade80';
-    ctx.beginPath(); ctx.arc(mx, my + totalOffsetY, 4, 0, 2*Math.PI); ctx.fill();
-    ctx.restore();
+      faceMesh.onResults(onResults);
+      faceMeshRef.current = faceMesh;
+
+      processVideoLoop();
+    } catch (error) {
+      console.warn('AI Load Error, switching to manual mode:', error);
+      setIsModelLoaded(true); // UI kilidini aç
+      setShowManualButton(true);
+    }
+  };
+
+  const processVideoLoop = async () => {
+    if (!isMountedRef.current) return;
+
+    const now = Date.now();
+    // FPS Limitleme (30 FPS max)
+    if (now - lastProcessTimeRef.current > 33 && videoRef.current && faceMeshRef.current) {
+      try {
+        await faceMeshRef.current.send({ image: videoRef.current });
+        lastProcessTimeRef.current = now;
+      } catch (e) {
+        // Silent fail
+      }
+    }
+    requestAnimationFrame(processVideoLoop);
   };
 
   // --- POSE CALCULATION ---
   const calculatePose = (landmarks: any) => {
-    if (!landmarks) return null;
     const nose = landmarks[1];
     const leftCheek = landmarks[234];
     const rightCheek = landmarks[454];
-    const leftEye = landmarks[33];
-    const rightEye = landmarks[263];
-    const mouthBottom = landmarks[14];
-    
-    const midEyes = { x: (leftEye.x + rightEye.x) / 2, y: (leftEye.y + rightEye.y) / 2 };
+    const midEyes = {
+      x: (landmarks[33].x + landmarks[263].x) / 2,
+      y: (landmarks[33].y + landmarks[263].y) / 2,
+    };
+
     const faceWidth = Math.abs(rightCheek.x - leftCheek.x);
-    const noseRelativeX = nose.x - midEyes.x; 
-    const yaw = -(noseRelativeX / faceWidth) * 250; 
+    // Yaw
+    const yaw = -((nose.x - midEyes.x) / faceWidth) * 200;
 
-    const faceHeight = Math.abs(mouthBottom.y - midEyes.y);
-    const noseRelativeY = nose.y - midEyes.y;
-    const pitchRatio = noseRelativeY / faceHeight;
-    const pitch = (pitchRatio - 0.4) * 150; 
+    // Pitch
+    const faceHeight = Math.abs(landmarks[14].y - midEyes.y);
+    const pitch = ((nose.y - midEyes.y) / faceHeight - 0.4) * 150;
 
-    const dx = rightEye.x - leftEye.x;
-    const dy = rightEye.y - leftEye.y;
-    const roll = Math.atan2(dy, dx) * (180 / Math.PI);
-    return { yaw, pitch, roll };
+    return { yaw, pitch };
   };
 
-  // --- FACE MESH SONUÇLARI ---
-  const onResults = useCallback((results: any) => {
-    if (!isMountedRef.current || status === 'capturing') return;
-    if (!isModelLoaded) setIsModelLoaded(true);
+  // --- HAIR MODEL LOAD (ONNX) ---
+  const loadHairModel = async () => {
+    try {
+      const ort = getOrt();
+      if (!ort) return;
+
+      const session = await ort.InferenceSession.create('/models/face_parsing_bisenet.onnx', {
+        executionProviders: ['wasm'],
+      });
+
+      hairSessionRef.current = session;
+      setIsHairModelReady(true);
+      console.log('Hair segmentation model yüklendi');
+    } catch (error) {
+      console.error('Hair segmentation modeli yüklenemedi:', error);
+      setIsHairModelReady(false);
+    }
+  };
+
+  // --- HAIR SEGMENTATION & ANALYSIS ---
+  const runHairSegmentation = async (dataUrl: string) => {
+    const ort = getOrt();
+    if (!ort) return null;
+    if (!hairSessionRef.current) {
+      console.warn('Hair model hazır değil');
+      return null;
+    }
+
+    const INPUT_SIZE = 512;
+    const HAIR_CLASS_ID = 10;
+
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+      image.onload = () => resolve(image);
+      image.onerror = (err) => reject(err);
+      image.src = dataUrl;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = INPUT_SIZE;
+    canvas.height = INPUT_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.drawImage(img, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    const imageData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+    const { data } = imageData;
+
+    const floatData = new Float32Array(1 * 3 * INPUT_SIZE * INPUT_SIZE);
+
+    for (let y = 0; y < INPUT_SIZE; y++) {
+      for (let x = 0; x < INPUT_SIZE; x++) {
+        const idx = (y * INPUT_SIZE + x) * 4;
+        const r = data[idx] / 255.0;
+        const g = data[idx + 1] / 255.0;
+        const b = data[idx + 2] / 255.0;
+
+        const offset = y * INPUT_SIZE + x;
+
+        floatData[0 * INPUT_SIZE * INPUT_SIZE + offset] = b;
+        floatData[1 * INPUT_SIZE * INPUT_SIZE + offset] = g;
+        floatData[2 * INPUT_SIZE * INPUT_SIZE + offset] = r;
+      }
+    }
+
+    const session = hairSessionRef.current;
+    const inputName = session.inputNames[0];
+    const feeds: Record<string, any> = {};
+    feeds[inputName] = new ort.Tensor('float32', floatData, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+
+    const results = await session.run(feeds);
+    const outputName = session.outputNames[0];
+    const output = results[outputName];
+
+    if (!output) return null;
+
+    const [n, c, h, w] = output.dims;
+    const scores = output.data as Float32Array;
+
+    let hairPixelCount = 0;
+    const totalPixelCount = h * w;
+
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const maskCtx = maskCanvas.getContext('2d');
+    if (!maskCtx) return null;
+    const maskImageData = maskCtx.createImageData(w, h);
+    const maskData = maskImageData.data;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        let maxVal = -Infinity;
+        let maxClass = 0;
+
+        for (let ci = 0; ci < c; ci++) {
+          const score = scores[ci * h * w + idx];
+          if (score > maxVal) {
+            maxVal = score;
+            maxClass = ci;
+          }
+        }
+
+        const maskIdx = idx * 4;
+        if (maxClass === HAIR_CLASS_ID) {
+          maskData[maskIdx] = 0;
+          maskData[maskIdx + 1] = 255;
+          maskData[maskIdx + 2] = 0;
+          maskData[maskIdx + 3] = 180;
+          hairPixelCount++;
+        } else {
+          maskData[maskIdx] = 0;
+          maskData[maskIdx + 1] = 0;
+          maskData[maskIdx + 2] = 0;
+          maskData[maskIdx + 3] = 0;
+        }
+      }
+    }
+
+    maskCtx.putImageData(maskImageData, 0, 0);
+
+    const hairCoverageRatio = hairPixelCount / totalPixelCount;
+    const hairCoveragePercent = Math.round(hairCoverageRatio * 100);
+
+    return {
+      hairCoverageRatio,
+      hairCoveragePercent,
+    };
+  };
+
+  // --- CAPTURE HANDLER (ÖNCE BUNU TANIMLIYORUZ!) ---
+  const handleCapture = useCallback(async () => {
+    if (!videoRef.current || isCapturingRef.current) return;
     if (!currentStep) return;
 
-    // 1. Işık Kontrolü
-    const pCanvas = processRef.current;
-    if (pCanvas && results.image) {
-      const pCtx = pCanvas.getContext('2d');
-      if (pCtx) {
-          pCtx.drawImage(results.image, 0, 0, 50, 50);
-          const imageData = pCtx.getImageData(0, 0, 50, 50);
-          let totalBrightness = 0;
-          const data = imageData.data;
-          for(let i=0; i < data.length; i+=4) totalBrightness += (data[i] + data[i+1] + data[i+2]) / 3;
-          const avgBrightness = totalBrightness / (data.length / 4);
-          const lowLight = avgBrightness < 50;
-          setIsLowLight(lowLight);
-          if (lowLight && voiceEnabled && Math.random() > 0.98) speak("Please turn to the light");
-      }
-    }
-
-    // 2. Yüz Çizgilerini Çiz (AR Layer)
-    const canvas = canvasRef.current;
-    if (canvas && videoRef.current) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-            canvas.width = videoRef.current.videoWidth;
-            canvas.height = videoRef.current.videoHeight;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.save();
-            ctx.translate(canvas.width, 0);
-            ctx.scale(-1, 1); // Aynalama
-            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-               drawHairlineAR(ctx, results.multiFaceLandmarks[0], canvas.width, canvas.height);
-            }
-            ctx.restore();
-        }
-    }
-
-    const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
-
-    // 3. Manuel Adım (Arka kısım)
-    if (currentStep.guideType === 'manual') {
-      if (!hasFace && !isLowLight) {
-          setStatus('locked');
-          setScanProgress(prev => Math.min(prev + 1.5, 100));
-          if (scanProgress > 80) speak("Perfect, hold still");
-      } else {
-          setScanProgress(0);
-          if (hasFace) setStatus('aligning'); 
-          if (hasFace) speak("Please turn around");
-      }
-      return;
-    }
-
-    // 4. FaceMesh Takip Mantığı
-    if (!hasFace) {
-      setQuality(prev => ({ ...prev, faceDetected: false }));
-      setStatus('searching');
-      setScanProgress(0);
-      return;
-    }
-
-    setQuality(prev => ({ ...prev, faceDetected: true }));
-    const landmarks = results.multiFaceLandmarks[0];
-    const headPose = calculatePose(landmarks);
-    if (!headPose) return;
-    setPose(headPose);
-    const { target } = currentStep;
-    if (!target) return;
-
-    const yawDiff = headPose.yaw - target.yaw;
-    const pitchDiff = headPose.pitch - target.pitch;
-    const isYawGood = Math.abs(yawDiff) < (target.yawTolerance || 15);
-    const isPitchGood = Math.abs(pitchDiff) < (target.pitchTolerance || 15);
-    const isRollGood = Math.abs(headPose.roll - target.roll) < 15; 
-
-    if (isYawGood && isPitchGood && isRollGood) {
-      setStatus('locked');
-      if (scanProgress < 100) setScanProgress(prev => prev + 3); 
-      if (scanProgress > 80 && status !== 'locked') speak("Perfect, hold still", true);
-    } else {
-      setStatus('aligning');
-      setScanProgress(prev => Math.max(0, prev - 5)); 
-      if (Math.abs(yawDiff) > (target.yawTolerance || 15)) {
-          if (yawDiff > 0) speak("Turn Left");
-          else speak("Turn Right");
-      } else if (Math.abs(pitchDiff) > (target.pitchTolerance || 15)) {
-          if (pitchDiff > 0) speak("Look Up");
-          else speak("Look Down");
-      }
-    }
-  }, [currentStep, scanProgress, status, isLowLight, voiceEnabled, speak]);
-
-  useEffect(() => { onResultsRef.current = onResults; }, [onResults]);
-
-  // --- INIT (HEM FACEMESH HEM SEGMENTER) ---
-  useEffect(() => {
-    isMountedRef.current = true;
-    
-    // Segmenter'ı Yükle
-    const initSegmenter = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
-        const newSegmenter = await ImageSegmenter.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          outputCategoryMask: true,
-          outputConfidenceMasks: false
-        });
-        if (isMountedRef.current) {
-          segmenterRef.current = newSegmenter;
-          console.log("Hair Segmenter Loaded");
-        }
-      } catch (e) {
-        console.error("Segmentation init error", e);
-      }
-    };
-    initSegmenter();
-
-    // FaceMesh ve Camera'yı Yükle
-    const initFaceMesh = async () => {
-      try {
-        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
-        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
-
-        if (!isMountedRef.current) return;
-
-        const FaceMeshClass = (window as any).FaceMesh;
-        const CameraClass = (window as any).Camera;
-
-        if (!FaceMeshClass || !CameraClass) {
-             throw new Error("SDKs not loaded correctly");
-        }
-
-        const faceMesh = new FaceMeshClass({
-          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`,
-        });
-
-        faceMesh.setOptions({
-          maxNumFaces: 1,
-          refineLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-        });
-
-        faceMesh.onResults((results: any) => {
-          if (onResultsRef.current) onResultsRef.current(results);
-        });
-
-        faceMeshRef.current = faceMesh;
-
-        if (videoRef.current) {
-          const camera = new CameraClass(videoRef.current, {
-            onFrame: async () => {
-              // 1. FaceMesh İşlemi
-              if (faceMeshRef.current && videoRef.current) {
-                 await faceMeshRef.current.send({ image: videoRef.current });
-              }
-              
-              // 2. Hair Segmentation İşlemi (Aynı döngü içinde!)
-              if (segmenterRef.current && videoRef.current && hairCanvasRef.current) {
-                 const startTimeMs = performance.now();
-                 // Segmenter'a video elementini gönder
-                 const result = segmenterRef.current.segmentForVideo(videoRef.current, startTimeMs);
-                 drawSegmentation(result);
-              }
-            },
-            width: 1280,
-            height: 720,
-          });
-          camera.start();
-          cameraRef.current = camera;
-        }
-
-      } catch (error) {
-        console.error("Init Error:", error);
-        toast({ title: "Camera/AI Error", description: "Please refresh the page.", variant: "destructive" });
-      }
-    };
-
-    initFaceMesh();
-    setTimeout(() => speak(currentStep.instruction), 1000);
-
-    return () => {
-      isMountedRef.current = false;
-      if (cameraRef.current) cameraRef.current.stop();
-      if (faceMeshRef.current) faceMeshRef.current.close();
-      if (segmenterRef.current) segmenterRef.current.close();
-      window.speechSynthesis.cancel();
-    };
-  }, []); 
-
-  // Capture Logic
-  useEffect(() => {
-    if (scanProgress >= 100 && status !== 'capturing') handleCapture();
-  }, [scanProgress, status]);
-
-  const handleCapture = useCallback(() => {
-    if (!videoRef.current || !isMountedRef.current) return;
+    isCapturingRef.current = true;
     setStatus('capturing');
+
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    const scale = Math.min(1, 1024 / video.videoWidth);
-    canvas.width = video.videoWidth * scale;
-    canvas.height = video.videoHeight * scale;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
-    
+
     if (ctx) {
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        const newPhoto = {
-          id: Date.now(),
-          preview: dataUrl,
-          type: currentStep.id,
-          metadata: { hairStyle: 'standard', hairlineOffset: 0 } 
-        };
-        setCapturedImages(prev => [...prev, newPhoto]);
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0);
 
-        const flash = document.createElement('div');
-        flash.className = 'fixed inset-0 bg-white z-[60] animate-out fade-out duration-500 pointer-events-none';
-        document.body.appendChild(flash);
-        setTimeout(() => flash.remove(), 500);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
 
-        setTimeout(() => {
-          if (!isMountedRef.current) return;
-          if (currentStepIndex < SCAN_STEPS.length - 1) {
-            setCurrentStepIndex(prev => prev + 1);
-            setScanProgress(0);
-            setStatus('searching');
-            setTimeout(() => speak(SCAN_STEPS[currentStepIndex + 1].instruction, true), 500);
-          } else {
-            onComplete([...capturedImages, newPhoto]);
+      const basePhoto: CapturedPhoto = {
+        id: Date.now(),
+        preview: dataUrl,
+        type: currentStep.id,
+      };
+
+      let finalPhoto = basePhoto;
+
+      if (isHairModelReady) {
+        try {
+          const hairResult = await runHairSegmentation(dataUrl);
+          if (hairResult) {
+            finalPhoto = {
+              ...basePhoto,
+              hairAnalysis: {
+                hairCoverageRatio: hairResult.hairCoverageRatio,
+                hairCoveragePercent: hairResult.hairCoveragePercent,
+              },
+            };
+
+            toast({
+              title: 'Saç Analizi Tamamlandı',
+              description: `Tahmini saç yoğunluğu: %${hairResult.hairCoveragePercent}`,
+            });
           }
-        }, 1000);
-    }
-  }, [currentStep, currentStepIndex, onComplete, speak, capturedImages]);
+        } catch (error) {
+          console.error('Saç segmentasyonunda hata:', error);
+          toast({
+            title: 'Saç Analizi Hatası',
+            description: 'Saç segmentasyonu sırasında bir hata oluştu.',
+            variant: 'destructive',
+          });
+        }
+      } else {
+        console.warn('Hair model ready değil, sadece foto kaydediliyor');
+      }
 
+      setCapturedImages((prev) => [...prev, finalPhoto]);
+
+      const flash = document.createElement('div');
+      flash.className =
+        'fixed inset-0 bg-white z-[100] animate-out fade-out duration-500 pointer-events-none';
+      document.body.appendChild(flash);
+      setTimeout(() => flash.remove(), 500);
+
+      toast({ title: 'Fotoğraf Çekildi', description: 'Sıradaki adıma geçiliyor...' });
+
+      setTimeout(() => {
+        if (isMountedRef.current) {
+          if (currentStepIndex < SCAN_STEPS.length - 1) {
+            setCurrentStepIndex((prev) => prev + 1);
+          } else {
+            onComplete([...capturedImages, finalPhoto]);
+          }
+        }
+      }, 1000);
+    }
+  }, [currentStep, currentStepIndex, capturedImages, isHairModelReady, onComplete, toast]);
+
+  // --- COUNTDOWN LOGIC (handleCapture ARTIK ÜSTTE TANIMLI) ---
+  const startCountdown = useCallback(() => {
+    if (status === 'countdown' || status === 'capturing') return;
+    if (isCapturingRef.current) return;
+
+    setStatus('countdown');
+    setCountdown(3);
+
+    let count = 3;
+
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+
+    countdownIntervalRef.current = setInterval(() => {
+      count--;
+      if (count > 0) {
+        setCountdown(count);
+      } else {
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        setCountdown(null);
+        handleCapture();
+      }
+    }, 1000);
+  }, [status, handleCapture]);
+
+  // --- MAIN LOOP RESULT HANDLER ---
+  const onResults = useCallback(
+    (results: any) => {
+      if (!isMountedRef.current || !currentStep) return;
+      setIsModelLoaded(true);
+
+      if (status === 'countdown' || status === 'capturing') return;
+
+      if (currentStep.guideType === 'manual') {
+        setStatus('locked');
+        setGuidanceMessage('Konumunuzu ayarlayıp bekleyin');
+        startCountdown();
+        return;
+      }
+
+      const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+
+      if (!hasFace) {
+        setStatus('searching');
+        setGuidanceMessage('Yüzünüzü çerçeveye yerleştirin');
+        return;
+      }
+
+      const landmarks = results.multiFaceLandmarks[0];
+      const pose = calculatePose(landmarks);
+      const target = currentStep.target!;
+
+      const yawDiff = pose.yaw - target.yaw;
+      const pitchDiff = pose.pitch - target.pitch;
+
+      const isYawGood = Math.abs(yawDiff) < target.tolerance;
+      const isPitchGood = Math.abs(pitchDiff) < target.tolerance;
+
+      if (isYawGood && isPitchGood) {
+        setStatus('locked');
+        setGuidanceMessage('Mükemmel! Kıpırdamayın.');
+        startCountdown();
+      } else {
+        setStatus('aligning');
+
+        if (!isYawGood) {
+          if (yawDiff > 0) setGuidanceMessage('Başınızı hafifçe SOLA çevirin');
+          else setGuidanceMessage('Başınızı hafifçe SAĞA çevirin');
+        } else if (!isPitchGood) {
+          if (pitchDiff > 0) setGuidanceMessage('Çenenizi biraz YUKARI kaldırın');
+          else setGuidanceMessage('Çenenizi biraz AŞAĞI indirin');
+        }
+      }
+    },
+    [currentStep, status, startCountdown],
+  );
+
+  // CRITICAL FIX: Eğer step undefined ise (index out of bounds) render etme
   if (!currentStep) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      <canvas ref={processRef} width="50" height="50" className="hidden" />
-
-      {/* HEADER */}
-      <div className="absolute top-0 left-0 right-0 z-20 p-6 bg-gradient-to-b from-black/90 via-black/40 to-transparent text-white flex justify-between items-start pointer-events-none">
-        <div className="pointer-events-auto flex flex-col gap-2">
-          <div className="flex items-center gap-2 mb-1">
-             <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-medium tracking-wider uppercase backdrop-blur-md">
-               Step {currentStepIndex + 1}/{SCAN_STEPS.length}
-             </span>
-             <Button
-               variant="ghost" size="icon"
-               onClick={() => setVoiceEnabled(!voiceEnabled)}
-               className="h-8 w-8 bg-white/10 hover:bg-white/20 text-white rounded-full"
-             >
-               {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-             </Button>
-          </div>
-          <h2 className="text-2xl font-bold tracking-tight drop-shadow-lg">{currentStep.label}</h2>
-        </div>
-        <button 
-          onClick={onCancel}
-          className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
-        >
-          <X className="w-6 h-6" />
-        </button>
+    <div className="fixed inset-0 z-50 bg-black text-white flex flex-col overflow-hidden">
+      {/* 1. VİDEO KATMANI */}
+      <div className="absolute inset-0 z-0">
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover transform scale-x-[-1]"
+          playsInline
+          muted
+        />
+        <GuideOverlay shape={currentStep.guideShape} status={status} />
       </div>
 
-      {/* CAMERA VIEW */}
-      <div className="relative flex-1 bg-gray-900 overflow-hidden flex items-center justify-center">
+      {/* 2. FEEDBACK KATMANI */}
+      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none">
         {!isModelLoaded && (
-          <div className="absolute z-30 flex flex-col items-center text-white/70">
-            <RefreshCw className="w-10 h-10 animate-spin mb-2" />
-            <p>Initializing AI System...</p>
+          <div className="bg-black/70 backdrop-blur-md p-6 rounded-2xl flex flex-col items-center">
+            <RefreshCw className="w-10 h-10 animate-spin mb-3 text-indigo-400" />
+            <p className="font-medium">AI Kamera Hazırlanıyor...</p>
           </div>
         )}
-        
-        {/* 1. Video Layer */}
-        <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
-        
-        {/* 2. Hair Segmentation Mask Layer - Videonun üzerine */}
-        <canvas ref={hairCanvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]" />
 
-        {/* 3. AR Drawing Layer (Yüz Çizgileri) - En üstte */}
-        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"/>
-
-        {isLowLight && (
-            <motion.div 
-                initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
-                className="absolute top-24 left-1/2 -translate-x-1/2 bg-amber-500/90 text-white px-6 py-2 rounded-full flex items-center gap-2 z-40 shadow-lg backdrop-blur-sm"
+        <AnimatePresence>
+          {countdown !== null && (
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1.5, opacity: 1 }}
+              exit={{ scale: 2, opacity: 0 }}
+              key={countdown}
+              className="text-8xl font-black text-white drop-shadow-lg"
             >
-                <Sun className="w-5 h-5 animate-pulse" />
-                <span className="font-bold text-sm">Please turn to the light</span>
+              {countdown}
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {status === 'locked' && countdown === null && (
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            className="bg-green-500/90 p-4 rounded-full mb-4"
+          >
+            <Check className="w-8 h-8 text-white" />
+          </motion.div>
         )}
-        
-        {/* HUD */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute inset-0 flex items-center justify-center">
-              <motion.div
-                animate={{
-                  borderColor: status === 'locked' ? '#4ade80' : status === 'aligning' ? '#fbbf24' : 'rgba(255,255,255,0.3)',
-                  borderWidth: status === 'locked' ? 4 : 2,
-                  scale: status === 'locked' ? 1.05 : 1
-                }}
-                className="w-[350px] h-[480px] rounded-[4rem] border-2 relative overflow-hidden shadow-2xl transition-colors duration-300 bg-transparent"
-              >
-                <AnimatePresence>
-                  {(status === 'locked' || status === 'capturing') && (
-                    <motion.div
-                      initial={{ top: "0%" }} animate={{ top: "100%" }}
-                      transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                      className="absolute left-0 right-0 h-1 bg-green-400 shadow-[0_0_15px_rgba(74,222,128,0.8)] z-10"
-                    />
-                  )}
-                </AnimatePresence>
-                {!quality.faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20">
-                    <User className="w-16 h-16 text-white/50 mb-2" />
-                    <span className="bg-red-500/80 text-white px-3 py-1 rounded-full text-sm font-bold">Face not found...</span>
-                  </div>
-                )}
-              </motion.div>
-          </div>
-          <div className="absolute bottom-36 left-0 right-0 text-center space-y-4 pointer-events-auto z-30"> 
-              <motion.div
-               key={currentStep.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-               className="inline-block bg-black/60 backdrop-blur-md px-6 py-3 rounded-2xl border border-white/10 shadow-2xl"
-              >
-               <h3 className="text-xl font-bold text-white">{currentStep.instruction}</h3>
-               {status === 'locked' && (
-                 <p className="text-green-400 text-sm mt-1 font-bold tracking-wider animate-pulse uppercase">Perfect, hold still</p>
-               )}
-              </motion.div>
-          </div>
-        </div>
       </div>
 
-      {/* FOOTER */}
-      <div className="bg-black/90 backdrop-blur-xl p-4 pb-8 flex flex-col items-center border-t border-white/10 relative z-50">
-        <div className="flex items-center justify-between w-full max-w-md px-8">
-            <div className="relative w-20 h-20 flex items-center justify-center mx-auto">
-            <svg className="absolute inset-0 w-full h-full rotate-[-90deg]">
-                <circle cx="40" cy="40" r="36" fill="none" stroke="#374151" strokeWidth="4" />
-                <circle 
-                cx="40" cy="40" r="36" fill="none" stroke={status === 'locked' || status === 'capturing' ? '#4ade80' : '#6366f1'} strokeWidth="4"
-                strokeDasharray={226} strokeDashoffset={226 - (226 * scanProgress) / 100} strokeLinecap="round" className="transition-all duration-100 ease-linear"
-                />
-            </svg>
-            <button
-                onClick={() => setScanProgress(100)} 
-                className="relative w-14 h-14 rounded-full bg-white hover:scale-95 transition-transform flex items-center justify-center group shadow-lg shadow-white/20"
-            >
-                {status === 'capturing' ? <Check className="w-6 h-6 text-green-600" /> : <CameraIcon className="w-6 h-6 text-gray-900 group-hover:text-indigo-600 transition-colors" />}
-            </button>
-            </div>
+      {/* 3. UI KONTROL KATMANI */}
+      <div className="absolute inset-0 z-20 flex flex-col justify-between pointer-events-none">
+        <div className="p-4 pt-safe bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start pointer-events-auto">
+          <div>
+            <span className="inline-block bg-white/20 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold mb-1">
+              ADIM {currentStepIndex + 1} / {SCAN_STEPS.length}
+            </span>
+            <h2 className="text-xl font-bold drop-shadow-md">{currentStep.label}</h2>
+          </div>
+          <button
+            onClick={onCancel}
+            className="p-2 bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        <div className="p-6 pb-safe bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col items-center pointer-events-auto space-y-6">
+          <div
+            className={`
+              px-6 py-3 rounded-2xl backdrop-blur-md border border-white/10 text-center transition-colors duration-300
+              ${status === 'aligning' ? 'bg-amber-500/80 text-white' : 'bg-black/60 text-white'}
+              ${status === 'locked' ? 'bg-green-500/80' : ''}
+            `}
+          >
+            <p className="text-lg font-bold">{guidanceMessage || currentStep.instruction}</p>
+            <p className="text-xs opacity-80 mt-1 font-medium">{currentStep.subInstruction}</p>
+          </div>
+
+          <div className="h-16 flex items-center justify-center">
+            {showManualButton && status !== 'countdown' && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                <button
+                  onClick={handleCapture}
+                  className="flex items-center bg-white text-black hover:bg-gray-200 rounded-full font-bold px-8 py-3 shadow-xl transition-colors"
+                >
+                  <CameraIcon className="w-5 h-5 mr-2" />
+                  Manuel Çek
+                </button>
+              </motion.div>
+            )}
+          </div>
         </div>
       </div>
     </div>
