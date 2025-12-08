@@ -6,6 +6,7 @@ import {
 import { FaceMesh, Results } from '@mediapipe/face_mesh';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
+import { processHairImage } from '@/lib/visionModel';
 
 // --- CONFIGURATION ---
 const SCAN_STEPS = [
@@ -13,7 +14,7 @@ const SCAN_STEPS = [
     id: 'front', 
     label: 'Ön Görünüm', 
     instruction: 'Kameraya Düz Bakın', 
-    target: { yaw: 0, pitch: 0, roll: 0, yawTolerance: 10, pitchTolerance: 15 }, // Toleranslar sıkılaştırıldı
+    target: { yaw: 0, pitch: 0, roll: 0, yawTolerance: 10, pitchTolerance: 15 },
     guideType: 'face'
   },
   { 
@@ -34,7 +35,7 @@ const SCAN_STEPS = [
     id: 'crown', 
     label: 'Tepe Görünümü', 
     instruction: 'Başınızı Öne Eğerek Tepeyi Gösterin', 
-    target: { yaw: 0, pitch: 50, roll: 0, yawTolerance: 30, pitchTolerance: 30 }, // Pitch hedefi artırıldı
+    target: { yaw: 0, pitch: 50, roll: 0, yawTolerance: 30, pitchTolerance: 30 },
     guideType: 'face'
   },
   { 
@@ -57,6 +58,7 @@ interface CapturedPhoto {
   preview: string;
   type: string;
   metadata?: any;
+  analysis?: any;
 }
 
 interface LiveScannerProps {
@@ -67,13 +69,13 @@ interface LiveScannerProps {
 const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const processRef = useRef<HTMLCanvasElement>(null);
   const { toast } = useToast();
 
   // State
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [capturedImages, setCapturedImages] = useState<CapturedPhoto[]>([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const [forceManualMode, setForceManualMode] = useState(false);
   
   // Tracking State
   const [status, setStatus] = useState<'searching' | 'aligning' | 'locked' | 'capturing'>('searching');
@@ -92,6 +94,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const lastSpeakTimeRef = useRef(0);
   const requestRef = useRef<number>();
   const lastProcessTimeRef = useRef(0);
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
@@ -100,28 +103,25 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     if (!voiceEnabled || !window.speechSynthesis) return;
     
     const now = Date.now();
-    // Çok sık konuşmasını engelle (3 saniye ara)
     if (!force && now - lastSpeakTimeRef.current < 3000) return;
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'tr-TR'; // Türkçe konuşması için
+    utterance.lang = 'tr-TR';
     utterance.rate = 1.0;
     
     window.speechSynthesis.speak(utterance);
     lastSpeakTimeRef.current = now;
   }, [voiceEnabled]);
 
-  // --- AR DRAWING (SAÇ ÇİZİMİ) ---
+  // --- AR DRAWING ---
   const drawHairlineAR = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
     if (!landmarks || landmarks.length === 0) return;
 
     const style = HAIR_STYLES[hairStyle];
-    
-    // MediaPipe noktaları (Mesh map'e göre)
-    const mid = landmarks[10];  // Alın ortası
-    const left = landmarks[338]; // Sol şakak
-    const right = landmarks[297]; // Sağ şakak
+    const mid = landmarks[10];
+    const left = landmarks[338];
+    const right = landmarks[297];
 
     if (!mid || !left || !right) return;
 
@@ -136,8 +136,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     ctx.save();
     ctx.beginPath();
-    
-    // Bezier curve ile saç çizgisi simülasyonu
     ctx.moveTo(lx, ly + totalOffsetY + (style.curvature * 20));
     
     const cp1x = lx + (mx - lx) * 0.5;
@@ -149,7 +147,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     ctx.bezierCurveTo(mx, my + totalOffsetY, cp2x, cp2y, rx, ry + totalOffsetY + (style.curvature * 20));
 
     ctx.lineWidth = 4;
-    ctx.strokeStyle = 'rgba(74, 222, 128, 0.8)'; // Parlak yeşil
+    ctx.strokeStyle = 'rgba(74, 222, 128, 0.8)';
     ctx.setLineDash([5, 5]);
     ctx.stroke();
     ctx.restore();
@@ -160,7 +158,20 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     isMountedRef.current = true;
     startCamera();
     
-    // İlk açılışta konuş
+    // Güvenlik Zamanlayıcısı: Eğer 10 saniye içinde model yüklenmezse manuel moda geç
+    loadingTimeoutRef.current = setTimeout(() => {
+        if (!isModelLoaded && isMountedRef.current) {
+            console.warn("AI Model yüklemesi zaman aşımına uğradı, manuel moda geçiliyor.");
+            setForceManualMode(true);
+            setIsModelLoaded(true); // Yükleme ekranını kapat
+            toast({
+                title: "Bağlantı Yavaş",
+                description: "AI özellikleri devre dışı bırakıldı. Manuel çekim yapabilirsiniz.",
+                variant: "default"
+            });
+        }
+    }, 10000);
+
     setTimeout(() => speak(currentStep.instruction), 1000);
 
     return () => {
@@ -169,10 +180,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       window.speechSynthesis.cancel();
       if (faceMeshRef.current) faceMeshRef.current.close();
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
     };
   }, []);
 
-  // Adım değiştiğinde reset
   useEffect(() => {
     setStatus('searching');
     setScanProgress(0);
@@ -202,6 +213,8 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     } catch (err) {
       console.error('Camera Error:', err);
       toast({ title: 'Kamera Hatası', variant: 'destructive' });
+      setForceManualMode(true);
+      setIsModelLoaded(true);
     }
   };
 
@@ -212,7 +225,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     }
   };
 
-  // --- POSE CALCULATION (SENİN ÖRNEĞİNDEKİ HASSAS VERSİYON) ---
+  // --- POSE CALCULATION ---
   const calculatePose = (landmarks: any[]) => {
     if (!landmarks) return null;
     const nose = landmarks[1];
@@ -228,40 +241,39 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     };
 
     const faceWidth = Math.abs(rightCheek.x - leftCheek.x);
-    // Yaw hesaplaması (Dönüş hassasiyeti için 200 çarpanı)
     const noseRelativeX = nose.x - midEyes.x; 
     const yaw = -(noseRelativeX / faceWidth) * 200; 
 
-    // Pitch hesaplaması
     const faceHeight = Math.abs(mouthBottom.y - midEyes.y);
     const noseRelativeY = nose.y - midEyes.y;
     const pitchRatio = noseRelativeY / faceHeight;
     const pitch = (pitchRatio - 0.4) * 150; 
 
-    // Roll hesaplaması
-    const dx = rightEye.x - leftEye.x;
-    const dy = rightEye.y - leftEye.y;
-    const roll = Math.atan2(dy, dx) * (180 / Math.PI);
-
-    return { yaw, pitch, roll };
+    return { yaw, pitch };
   };
 
   // --- MEDIA PIPE INIT ---
   const initializeFaceMesh = async () => {
-    const faceMesh = new FaceMesh({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
-    });
+    try {
+        const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`,
+        });
 
-    faceMesh.setOptions({
-      maxNumFaces: 1,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
+        faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+        });
 
-    faceMesh.onResults(onResults);
-    faceMeshRef.current = faceMesh;
-    processVideoLoop();
+        faceMesh.onResults(onResults);
+        faceMeshRef.current = faceMesh;
+        processVideoLoop();
+    } catch (error) {
+        console.error("FaceMesh Başlatılamadı:", error);
+        setForceManualMode(true);
+        setIsModelLoaded(true);
+    }
   };
 
   const processVideoLoop = () => {
@@ -270,7 +282,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     
     // 30 FPS Limit
     if (now - lastProcessTimeRef.current > 33 && videoRef.current && faceMeshRef.current) {
-      if (videoRef.current.readyState >= 2 && !videoRef.current.paused) {
+      if (videoRef.current.readyState >= 2 && !videoRef.current.paused && !forceManualMode) {
          faceMeshRef.current.send({ image: videoRef.current }).catch(() => {});
          lastProcessTimeRef.current = now;
       }
@@ -281,25 +293,25 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   // --- MAIN LOGIC LOOP ---
   const onResults = useCallback((results: Results) => {
     if (!isMountedRef.current || status === 'capturing') return;
+    
+    // İlk başarılı sonuçta yükleme ekranını kaldır ve timeout'u temizle
+    if (!isModelLoaded) {
+        setIsModelLoaded(true);
+        if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+    }
+
     if (!currentStep) return;
 
-    // 1. Işık Kontrolü (Lighting Detection)
-    // Performans için her frame değil, processRef canvas üzerinden küçük bir alanı kontrol edebiliriz
-    // (Basitleştirilmiş versiyon: direkt results.image kullanılamadığı için videoRef kullanacağız capturing sırasında)
-
-    // 2. Canvas Çizimi (AR)
+    // Canvas Çizimi
     const canvas = canvasRef.current;
     const video = videoRef.current;
     if (canvas && video) {
         const ctx = canvas.getContext('2d');
         if (ctx) {
-            // Canvas boyutunu videoya eşitle
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Aynalama efekti için transform
             ctx.save();
             ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
@@ -313,23 +325,26 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
     setFaceDetected(hasFace);
-    setIsModelLoaded(true);
 
-    // 3. Manuel Adım (Arka Görünüm)
-    if (currentStep.guideType === 'manual') {
-        if (!hasFace) {
+    // Manuel mod veya zorlanmış manuel mod
+    if (currentStep.guideType === 'manual' || forceManualMode) {
+        if (!hasFace && !forceManualMode) {
              setStatus('locked');
-             setScanProgress(prev => Math.min(prev + 1.5, 100)); // Yavaşça dol
+             setScanProgress(prev => Math.min(prev + 1.5, 100));
              if (scanProgress > 80) speak("Mükemmel, kıpırdamayın");
         } else {
-             setScanProgress(0);
-             setStatus('aligning'); 
-             if (scanProgress === 0) speak("Lütfen arkanızı dönün");
+             // Force Manual Mode'da her zaman hazır bekle
+             if (forceManualMode) {
+                 setStatus('locked');
+                 // Otomatik çekim yapma, kullanıcı butona bassın
+             } else {
+                 setScanProgress(0);
+                 setStatus('aligning'); 
+             }
         }
         return;
     }
 
-    // 4. Face Mesh Mantığı
     if (!hasFace) {
         setStatus('searching');
         setScanProgress(0);
@@ -343,30 +358,22 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     const { target } = currentStep;
     if (!target) return;
 
-    // Açı farklarını hesapla
     const yawDiff = headPose.yaw - target.yaw;
     const pitchDiff = headPose.pitch - target.pitch;
 
-    // "Hata" toleransı kontrolü (Mutlak değer kullanılarak yön bağımsız kontrol)
     const isYawGood = Math.abs(yawDiff) < target.yawTolerance;
     const isPitchGood = Math.abs(pitchDiff) < target.pitchTolerance;
     
-    // Eğer tüm açılar uygunsa
     if (isYawGood && isPitchGood) {
         setStatus('locked');
-        if (scanProgress < 100) setScanProgress(prev => prev + 4); // Hızlı dolum
-        
-        if (scanProgress > 70 && status !== 'locked') {
-            speak("Mükemmel");
-        }
+        if (scanProgress < 100) setScanProgress(prev => prev + 4);
+        if (scanProgress > 70 && status !== 'locked') speak("Mükemmel");
     } else {
         setStatus('aligning');
-        setScanProgress(prev => Math.max(0, prev - 5)); // Hata yaparsa progress düşsün
+        setScanProgress(prev => Math.max(0, prev - 5));
         
-        // Kullanıcıya sesli feedback
-        // Sola bakma durumunda yaw negatiftir.
         if (!isYawGood) {
-             if (yawDiff > 0) speak("Sola dönün"); // Pozitif fark varsa sola gitmeli
+             if (yawDiff > 0) speak("Sola dönün");
              else speak("Sağa dönün");
         } else if (!isPitchGood) {
              if (pitchDiff > 0) speak("Yukarı bakın");
@@ -374,10 +381,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         }
     }
 
-  }, [currentStep, scanProgress, status, voiceEnabled, hairStyle, hairlineOffset, speak]);
+  }, [currentStep, scanProgress, status, voiceEnabled, hairStyle, hairlineOffset, speak, isModelLoaded, forceManualMode]);
 
   // --- CAPTURE HANDLER ---
-  const handleCapture = useCallback(() => {
+  const handleCapture = useCallback(async () => {
     if (!videoRef.current || !isMountedRef.current) return;
     
     setStatus('capturing');
@@ -393,16 +400,29 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         ctx.drawImage(video, 0, 0);
         
         const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        
+        let analysisResult = null;
+        
+        // Sadece Önden görünümde saç analizi yapmayı dene (isteğe bağlı)
+        if (currentStep.id === 'front' || currentStep.id === 'crown') {
+            try {
+                // Arka planda analiz et ama UI'ı kilitleme
+                processHairImage(dataUrl).then(res => {
+                    console.log("Saç analizi sonucu:", res);
+                }).catch(err => console.warn("Analiz hatası:", err));
+            } catch (e) {}
+        }
+
         const newPhoto: CapturedPhoto = {
             id: crypto.randomUUID(),
             preview: dataUrl,
             type: currentStep.id,
-            metadata: { hairStyle, hairlineOffset }
+            metadata: { hairStyle, hairlineOffset },
+            analysis: analysisResult
         };
         
         setCapturedImages(prev => [...prev, newPhoto]);
 
-        // Flash Efekti
         const flash = document.createElement('div');
         flash.className = 'fixed inset-0 bg-white z-[100] animate-out fade-out duration-500 pointer-events-none';
         document.body.appendChild(flash);
@@ -455,14 +475,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
       {/* MAIN VIEW */}
       <div className="relative flex-1 bg-gray-900 overflow-hidden flex items-center justify-center">
-        {!isModelLoaded && currentStep.guideType !== 'manual' && (
+        {!isModelLoaded && !forceManualMode && (
           <div className="absolute z-30 flex flex-col items-center text-white/70 animate-pulse">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
             <p>AI Hazırlanıyor...</p>
           </div>
         )}
 
-        {/* VİDEO VE CANVAS AYNI BOYUTTA VE HİZADA */}
         <div className="relative w-full h-full flex items-center justify-center">
             <video 
               ref={videoRef}
@@ -473,12 +492,12 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
             />
             <canvas 
                 ref={canvasRef}
-                className="absolute w-full h-full object-cover pointer-events-none" // scale-x-[-1] canvas içinde yapıldı
+                className="absolute w-full h-full object-cover pointer-events-none" 
             />
         </div>
 
-        {/* AR SLIDERS (Sadece Ön Kamera) */}
-        {currentStep.guideType === 'face' && (
+        {/* AR SLIDERS */}
+        {currentStep.guideType === 'face' && !forceManualMode && (
             <div className="absolute right-4 top-1/3 flex flex-col items-center justify-center z-40 pointer-events-auto gap-4">
                  <div className="bg-black/40 backdrop-blur-md rounded-full py-6 px-2 border border-white/10 shadow-xl flex flex-col items-center">
                     <MousePointerClick className="w-5 h-5 text-white/70 mb-4" />
@@ -496,15 +515,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
             </div>
         )}
 
-        {/* LOW LIGHT WARNING */}
-        {isLowLight && (
-            <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-amber-500/90 text-white px-6 py-2 rounded-full flex items-center gap-2 z-40 shadow-lg backdrop-blur-sm animate-bounce">
-                <Sun className="w-5 h-5" />
-                <span className="font-bold text-sm">Işığı Artırın</span>
-            </div>
-        )}
-        
-        {/* CENTRAL HUD (KİLİTLENME HALKASI) */}
+        {/* HUD */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
              <motion.div
                 animate={{
@@ -525,11 +536,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                   )}
                 </AnimatePresence>
 
-                {!faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && (
+                {!faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && !forceManualMode && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20 text-center p-4">
                     <User className="w-16 h-16 text-white/50 mb-2" />
                     <span className="bg-red-500/90 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg">Yüz Bulunamadı</span>
-                    <p className="text-white/80 mt-2 text-sm">Lütfen yüzünüzü çerçeveye yerleştirin</p>
                   </div>
                 )}
              </motion.div>
@@ -544,6 +554,9 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                    Hareketsiz Kalın
                  </p>
                )}
+               {forceManualMode && (
+                   <p className="text-amber-400 text-xs mt-1">(Manuel Mod)</p>
+               )}
              </div>
         </div>
       </div>
@@ -551,7 +564,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       {/* BOTTOM CONTROLS */}
       <div className="bg-black/80 backdrop-blur-xl p-6 flex flex-col items-center border-t border-white/10 relative z-50">
         
-        {currentStep.guideType === 'face' && (
+        {currentStep.guideType === 'face' && !forceManualMode && (
             <div className="flex gap-2 mb-6 w-full justify-center overflow-x-auto no-scrollbar">
                 {Object.entries(HAIR_STYLES).map(([key, style]) => (
                     <button
@@ -569,7 +582,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
             </div>
         )}
 
-        {/* PROGRESS RING & MANUAL BUTTON */}
+        {/* CAPTURE BUTTON */}
         <div className="relative w-20 h-20 flex items-center justify-center">
             <svg className="absolute inset-0 w-full h-full rotate-[-90deg]">
                 <circle cx="40" cy="40" r="36" fill="none" stroke="#374151" strokeWidth="4" />
@@ -585,7 +598,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                 />
             </svg>
             <button
-                onClick={() => setScanProgress(100)}
+                onClick={() => {
+                    if (forceManualMode) handleCapture();
+                    else setScanProgress(100);
+                }}
                 className="relative w-14 h-14 rounded-full bg-white hover:scale-95 transition-transform flex items-center justify-center shadow-lg active:scale-90"
             >
                 {status === 'capturing' ? <Check className="w-6 h-6 text-green-600" /> : <CameraIcon className="w-6 h-6 text-gray-900" />}
