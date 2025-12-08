@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Camera as CameraIcon, RefreshCw, X, User, Check, Sun, Volume2, VolumeX, MousePointerClick
+  Camera as CameraIcon, RefreshCw, X, User, Check, Sun, Volume2, VolumeX
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
@@ -53,12 +53,6 @@ const SCAN_STEPS = [
   },
 ];
 
-const HAIR_STYLES: Record<string, { label: string; curvature: number; height: number }> = {
-  young: { label: 'Youthful', curvature: 0.8, height: 0 },
-  mature: { label: 'Mature', curvature: 1.5, height: -15 },
-  straight: { label: 'Straight', curvature: 0.1, height: 5 },
-};
-
 // --- SCRIPT YÜKLEYİCİ ---
 const loadScript = (src: string) => {
   return new Promise((resolve, reject) => {
@@ -89,15 +83,12 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [capturedImages, setCapturedImages] = useState<any[]>([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
-  const [forceManualMode, setForceManualMode] = useState(false);
   
   const [pose, setPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
   const [quality, setQuality] = useState({ lighting: 'good', stability: 'stable', faceDetected: false });
   const [status, setStatus] = useState<'searching' | 'aligning' | 'locked' | 'capturing'>('searching');
   const [scanProgress, setScanProgress] = useState(0);
 
-  const [hairlineOffset, setHairlineOffset] = useState(0);
-  const [hairStyle, setHairStyle] = useState('young');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [isLowLight, setIsLowLight] = useState(false);
 
@@ -125,7 +116,11 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   // --- AR DRAWING ---
   const drawHairlineAR = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
     if (!landmarks) return;
-    const style = HAIR_STYLES[hairStyle];
+    
+    // Sabit Standart Saç Stili Ayarları (Kullanıcı seçimi kaldırıldı)
+    const style = { curvature: 0.8, height: 0 }; 
+    const hairlineOffset = 0; // Sabit ofset
+
     const mid = landmarks[10];
     const left = landmarks[338];
     const right = landmarks[297];
@@ -213,7 +208,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       }
     }
 
-    // 2. AR Drawing
+    // 2. AR Drawing (ALWAYS ACTIVE)
     const canvas = canvasRef.current;
     if (canvas && videoRef.current) {
         const ctx = canvas.getContext('2d');
@@ -233,11 +228,9 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
 
-    // 3. Manual Step
-    if (currentStep.guideType === 'manual' || forceManualMode) {
-      if (forceManualMode) {
-          setStatus('locked');
-      } else if (!hasFace && !isLowLight) {
+    // 3. Manual Step (Back of head)
+    if (currentStep.guideType === 'manual') {
+      if (!hasFace && !isLowLight) {
           setStatus('locked');
           setScanProgress(prev => Math.min(prev + 1.5, 100));
           if (scanProgress > 80) speak("Perfect, hold still");
@@ -249,7 +242,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       return;
     }
 
-    // 4. FaceMesh
+    // 4. FaceMesh Tracking
     if (!hasFace) {
       setQuality(prev => ({ ...prev, faceDetected: false }));
       setStatus('searching');
@@ -286,7 +279,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           else speak("Look Down");
       }
     }
-  }, [currentStep, scanProgress, status, isLowLight, voiceEnabled, hairStyle, hairlineOffset, speak, forceManualMode]);
+  }, [currentStep, scanProgress, status, isLowLight, voiceEnabled, speak]);
 
   useEffect(() => { onResultsRef.current = onResults; }, [onResults]);
 
@@ -295,13 +288,11 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     isMountedRef.current = true;
     const init = async () => {
       try {
-        // SABİT SÜRÜMLER (CRITICAL FIX)
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
 
         if (!isMountedRef.current) return;
 
-        // Window objesinden güvenli erişim
         const FaceMeshClass = (window as any).FaceMesh;
         const CameraClass = (window as any).Camera;
 
@@ -342,9 +333,9 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
       } catch (error) {
         console.error("Init Error:", error);
-        setForceManualMode(true);
-        setIsModelLoaded(true);
-        toast({ title: "Camera Error", description: "Switched to manual mode due to error.", variant: "destructive" });
+        // Hata olsa bile manuel moda geçiş yapmıyoruz.
+        // Gerekirse kullanıcıya sayfayı yenilemesi gerektiğini söyleyen bir toast gösterebiliriz.
+        toast({ title: "Camera/AI Error", description: "Please refresh the page.", variant: "destructive" });
       }
     };
 
@@ -383,7 +374,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           id: Date.now(),
           preview: dataUrl,
           type: currentStep.id,
-          metadata: { hairStyle, hairlineOffset }
+          metadata: { hairStyle: 'standard', hairlineOffset: 0 } // Sabit metadata
         };
         setCapturedImages(prev => [...prev, newPhoto]);
 
@@ -404,7 +395,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           }
         }, 1000);
     }
-  }, [currentStep, currentStepIndex, onComplete, hairStyle, hairlineOffset, speak, capturedImages]);
+  }, [currentStep, currentStepIndex, onComplete, speak, capturedImages]);
 
   if (!currentStep) return null;
 
@@ -439,7 +430,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
       {/* CAMERA VIEW */}
       <div className="relative flex-1 bg-gray-900 overflow-hidden flex items-center justify-center">
-        {!isModelLoaded && !forceManualMode && (
+        {!isModelLoaded && (
           <div className="absolute z-30 flex flex-col items-center text-white/70">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
             <p>Initializing AI System...</p>
@@ -448,22 +439,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"/>
 
-        {/* CONTROLS */}
-        {currentStep.guideType === 'face' && !forceManualMode && (
-            <div className="absolute right-4 top-1/4 bottom-1/3 flex flex-col items-center justify-center z-40 pointer-events-auto">
-                <div className="bg-black/40 backdrop-blur-md rounded-full py-6 px-2 border border-white/10 flex flex-col items-center gap-4 shadow-xl">
-                    <MousePointerClick className="w-5 h-5 text-white/70 mb-2" />
-                    <div className="h-64 w-8 relative flex items-center justify-center">
-                        <input 
-                            type="range" min="-50" max="50" value={hairlineOffset} 
-                            onChange={(e) => setHairlineOffset(parseInt(e.target.value))}
-                            className="absolute -rotate-90 w-64 h-8 bg-transparent cursor-pointer appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-track]:w-full [&::-webkit-slider-track]:h-1 [&::-webkit-slider-track]:bg-white/30 [&::-webkit-slider-track]:rounded-full"
-                        />
-                    </div>
-                    <span className="text-[10px] text-white/70 font-medium uppercase rotate-[-90deg] mt-4 whitespace-nowrap">Hairline</span>
-                </div>
-            </div>
-        )}
+        {/* CONTROLS REMOVED: Right side sliders and toggles are gone as requested */}
 
         {isLowLight && (
             <motion.div 
@@ -495,7 +471,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                     />
                   )}
                 </AnimatePresence>
-                {!quality.faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && !forceManualMode && (
+                {!quality.faceDetected && currentStep.guideType !== 'manual' && isModelLoaded && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20">
                     <User className="w-16 h-16 text-white/50 mb-2" />
                     <span className="bg-red-500/80 text-white px-3 py-1 rounded-full text-sm font-bold">Face not found...</span>
@@ -512,7 +488,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                {status === 'locked' && (
                  <p className="text-green-400 text-sm mt-1 font-bold tracking-wider animate-pulse uppercase">Perfect, hold still</p>
                )}
-               {forceManualMode && <p className="text-amber-400 text-xs mt-1">(Manual Mode Active)</p>}
               </motion.div>
           </div>
         </div>
@@ -520,20 +495,8 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
       {/* FOOTER */}
       <div className="bg-black/90 backdrop-blur-xl p-4 pb-8 flex flex-col items-center border-t border-white/10 relative z-50">
-        {currentStep.guideType === 'face' && !forceManualMode && (
-            <div className="flex gap-2 mb-6 w-full justify-center px-4 overflow-x-auto">
-                {Object.entries(HAIR_STYLES).map(([key, style]) => (
-                    <button
-                        key={key} onClick={() => setHairStyle(key)}
-                        className={`px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${
-                            hairStyle === key ? 'bg-white text-black border-white scale-105 shadow-[0_0_15px_rgba(255,255,255,0.3)]' : 'bg-white/10 text-white/70 border-white/10 hover:bg-white/20'
-                        }`}
-                    >
-                        {style.label}
-                    </button>
-                ))}
-            </div>
-        )}
+        {/* HAIR STYLE SELECTORS REMOVED */}
+        
         <div className="flex items-center justify-between w-full max-w-md px-8">
             <div className="relative w-20 h-20 flex items-center justify-center mx-auto">
             <svg className="absolute inset-0 w-full h-full rotate-[-90deg]">
@@ -544,7 +507,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                 />
             </svg>
             <button
-                onClick={() => { if (forceManualMode) handleCapture(); else setScanProgress(100); }}
+                onClick={() => setScanProgress(100)} // Force capture if needed, manual mode check removed
                 className="relative w-14 h-14 rounded-full bg-white hover:scale-95 transition-transform flex items-center justify-center group shadow-lg shadow-white/20"
             >
                 {status === 'capturing' ? <Check className="w-6 h-6 text-green-600" /> : <CameraIcon className="w-6 h-6 text-gray-900 group-hover:text-indigo-600 transition-colors" />}
