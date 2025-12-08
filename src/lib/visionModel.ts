@@ -62,7 +62,7 @@ export const processHairImage = async (
 
     let imagePart;
 
-    // TİP KONTROLÜ VE DÖNÜŞÜM (Hata Düzeltmesi Buradadır)
+    // TİP KONTROLÜ VE DÖNÜŞÜM
     if (imageSource instanceof File || imageSource instanceof Blob) {
       // Eğer girdi bir Dosya ise, Base64'e çevir
       imagePart = await fileToGenerativePart(imageSource);
@@ -73,7 +73,7 @@ export const processHairImage = async (
         const mimeType = imageSource.substring(5, imageSource.indexOf(';'));
         imagePart = base64ToGenerativePart(imageSource, mimeType);
       } else {
-        // Düz URL veya başka bir string ise hata fırlat veya varsayılan işlem yap
+        // Düz URL veya başka bir string ise hata fırlat
          throw new Error("Geçersiz resim formatı. Lütfen geçerli bir dosya veya Base64 string sağlayın.");
       }
     } else {
