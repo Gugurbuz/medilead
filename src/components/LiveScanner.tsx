@@ -2,7 +2,14 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { FaceMesh } from '@mediapipe/face_mesh';
+// Sabitleri (CONSTANTS) de import ediyoruz
+import { 
+  FaceMesh, 
+  FACEMESH_TESSELATION, 
+  FACEMESH_RIGHT_EYEBROW, 
+  FACEMESH_LEFT_EYEBROW, 
+  FACEMESH_FACE_OVAL 
+} from '@mediapipe/face_mesh';
 import * as Cam from '@mediapipe/camera_utils';
 
 interface LiveScannerProps {
@@ -17,7 +24,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const [capturing, setCapturing] = useState(false);
   const cameraInstanceRef = useRef<Cam.Camera | null>(null);
 
-  // MediaPipe FaceMesh Kurulumu
   useEffect(() => {
     const faceMesh = new FaceMesh({
       locateFile: (file) => {
@@ -49,14 +55,14 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     }
 
     return () => {
+      // Temizleme işlemi
       if (cameraInstanceRef.current) {
-        // Stop method might not exist on type definition but cleans up processes
-        try { (cameraInstanceRef.current as any).stop(); } catch(e) {}
+         // @ts-ignore - Stop metodu bazı type definition'larda eksik olabiliyor
+         try { cameraInstanceRef.current.stop(); } catch(e) {}
       }
     };
   }, []);
 
-  // MediaPipe Sonuçlarını Çizme (O Yeşil Çizgiler)
   const onResults = useCallback((results: any) => {
     const canvas = canvasRef.current;
     const video = webcamRef.current?.video;
@@ -81,27 +87,23 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Çizim Ayarları (Tekno-Medikal Görünüm)
     ctx.lineWidth = 1;
     
     for (const landmarks of results.multiFaceLandmarks) {
-      // 1. Yüz Ağı (Mesh) Çizimi
-      drawConnectors(ctx, landmarks, FaceMesh.FACEMESH_TESSELATION, { color: '#C0C0C070', lineWidth: 0.5 });
+      // 1. Yüz Ağı (Mesh) - Gri ince çizgiler
+      drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, { color: '#C0C0C040', lineWidth: 0.5 });
       
-      // 2. Önemli Hatlar (Gözler, Kaşlar, Yüz Çerçevesi)
-      const mainColor = '#00FF94'; // Canlı Yeşil
+      // 2. Ana Hatlar - Canlı Yeşil
+      const mainColor = '#00FF94'; 
       
-      // Face Oval
-      drawConnectors(ctx, landmarks, FaceMesh.FACEMESH_FACE_OVAL, { color: mainColor, lineWidth: 2 });
-      // Eyebrows (Saç çizgisi için referans)
-      drawConnectors(ctx, landmarks, FaceMesh.FACEMESH_RIGHT_EYEBROW, { color: mainColor, lineWidth: 2 });
-      drawConnectors(ctx, landmarks, FaceMesh.FACEMESH_LEFT_EYEBROW, { color: mainColor, lineWidth: 2 });
+      drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, { color: mainColor, lineWidth: 2 });
+      drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW, { color: mainColor, lineWidth: 2 });
+      drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW, { color: mainColor, lineWidth: 2 });
       
-      // 3. Alın Bölgesi (Saç Çizgisi Analizi İçin Vurgu)
-      // Basitçe alındaki bazı noktaları vurgulayalım
-      const foreheadPoints = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
+      // 3. Alın Bölgesi Vurgusu (Noktalar)
+      const foreheadPoints = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152];
       
-      ctx.fillStyle = '#00C2FF'; // Mavi noktalar
+      ctx.fillStyle = '#00C2FF'; 
       foreheadPoints.forEach(index => {
         const point = landmarks[index];
         if(point) {
@@ -114,13 +116,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     ctx.restore();
   }, []);
 
-  // Helper function to draw connectors manually to avoid importing drawing_utils which adds huge bundle size
+  // Bağlantı çizici yardımcı fonksiyon
   const drawConnectors = (ctx: CanvasRenderingContext2D, landmarks: any[], connections: any[], style: { color: string, lineWidth: number }) => {
     ctx.strokeStyle = style.color;
     ctx.lineWidth = style.lineWidth;
     
-    // FACEMESH_TESSELATION gibi sabitler bazen array of arrays döner
-    // Mediapipe versiyonuna göre bu data yapısı değişebilir, basit bir loop:
+    if (!connections) return;
+
     for (const connection of connections) {
       const start = landmarks[connection[0]];
       const end = landmarks[connection[1]];
@@ -139,12 +141,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     const imageSrc = webcamRef.current?.getScreenshot();
     
     if (imageSrc) {
-      // Fotoğrafı işlemesi için parent'a gönder
-      // Not: Burada simüle ediyoruz, gerçek uygulamada tek tek çekim mantığına bağlanmalı
       onComplete([{
         id: Date.now(),
         preview: imageSrc,
-        type: 'front', // Varsayılan olarak front atıyoruz, sonra değiştirilebilir
+        type: 'front', 
         file: null
       }]);
     }
@@ -153,7 +153,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Üst Bilgi Barı */}
       <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/80 to-transparent">
         <div className="flex justify-between items-center max-w-4xl mx-auto text-white">
           <button onClick={onCancel} className="text-white/80 hover:text-white">
@@ -162,14 +161,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           <div className="text-center">
             <h3 className="font-semibold text-lg">AI Tarama Aktif</h3>
             <p className="text-xs text-green-400 font-mono tracking-wider">
-              {isFaceDetected ? 'YÜZ ALGILANDI - ANALİZ HAZIR' : 'YÜZ ARANIYOR...'}
+              {isFaceDetected ? 'YÜZ ALGILANDI' : 'YÜZ ARANIYOR...'}
             </p>
           </div>
-          <div className="w-10"></div> {/* Spacer */}
+          <div className="w-10"></div>
         </div>
       </div>
 
-      {/* Kamera Alanı */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
         <Webcam
           ref={webcamRef}
@@ -183,13 +181,11 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           }}
         />
         
-        {/* Face Mesh Canvas Katmanı */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         />
 
-        {/* Statik Rehber (SVG Overlay) */}
         {!isFaceDetected && (
            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-50">
              <div className="w-64 h-80 border-2 border-white/30 rounded-[50%] border-dashed animate-pulse"></div>
@@ -197,7 +193,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         )}
       </div>
 
-      {/* Alt Kontrol Barı */}
       <div className="bg-black p-8">
         <div className="max-w-md mx-auto flex justify-center items-center">
           <Button
