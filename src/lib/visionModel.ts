@@ -9,7 +9,7 @@ import * as ort from 'onnxruntime-web';
 // --- AYARLAR ---
 
 // ÖNEMLİ: Supabase Storage'a yüklediğiniz modelin "Public URL"ini buraya yapıştırın.
-const MODEL_PATH = 'https://sizin-proje-id.supabase.co/storage/v1/object/public/models/hair_segmentation.onnx';
+const MODEL_PATH = 'https://uzootohvsanqlhijmkpn.supabase.co/storage/v1/object/public/models/face_parsing_bisenet.onnx';
 
 // Modelinizin giriş boyutu (Genellikle 224, 256, 512 veya 640 olur. Modelinize göre değiştirin.)
 const MODEL_INPUT_SIZE = 512;
