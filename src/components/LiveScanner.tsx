@@ -348,86 +348,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     return { yaw, pitch };
   };
 
-  // --- COUNTDOWN LOGIC ---
-  const startCountdown = useCallback(() => {
-    if (status === 'countdown' || status === 'capturing') return;
-    if (isCapturingRef.current) return;
-
-    setStatus('countdown');
-    setCountdown(3);
-
-    let count = 3;
-
-    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-
-    countdownIntervalRef.current = setInterval(() => {
-      count--;
-      if (count > 0) {
-        setCountdown(count);
-      } else {
-        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-        setCountdown(null);
-        handleCapture();
-      }
-    }, 1000);
-  }, [status, handleCapture]);
-
-  // --- MAIN LOOP RESULT HANDLER ---
-  const onResults = useCallback(
-    (results: any) => {
-      if (!isMountedRef.current || !currentStep) return;
-      setIsModelLoaded(true);
-
-      // Eğer geri sayım veya çekim yapılıyorsa analizi durdur
-      if (status === 'countdown' || status === 'capturing') return;
-
-      // 1. Manuel Adımlar
-      if (currentStep.guideType === 'manual') {
-        setStatus('locked');
-        setGuidanceMessage('Konumunuzu ayarlayıp bekleyin');
-        startCountdown();
-        return;
-      }
-
-      // 2. Yüz Takip Adımları
-      const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
-
-      if (!hasFace) {
-        setStatus('searching');
-        setGuidanceMessage('Yüzünüzü çerçeveye yerleştirin');
-        return;
-      }
-
-      const landmarks = results.multiFaceLandmarks[0];
-      const pose = calculatePose(landmarks);
-      const target = currentStep.target!;
-
-      // Açı Kontrolü
-      const yawDiff = pose.yaw - target.yaw;
-      const pitchDiff = pose.pitch - target.pitch;
-
-      const isYawGood = Math.abs(yawDiff) < target.tolerance;
-      const isPitchGood = Math.abs(pitchDiff) < target.tolerance;
-
-      if (isYawGood && isPitchGood) {
-        setStatus('locked');
-        setGuidanceMessage('Mükemmel! Kıpırdamayın.');
-        startCountdown();
-      } else {
-        setStatus('aligning');
-
-        if (!isYawGood) {
-          if (yawDiff > 0) setGuidanceMessage('Başınızı hafifçe SOLA çevirin');
-          else setGuidanceMessage('Başınızı hafifçe SAĞA çevirin');
-        } else if (!isPitchGood) {
-          if (pitchDiff > 0) setGuidanceMessage('Çenenizi biraz YUKARI kaldırın');
-          else setGuidanceMessage('Çenenizi biraz AŞAĞI indirin');
-        }
-      }
-    },
-    [currentStep, status, startCountdown],
-  );
-
   // --- HAIR MODEL LOAD (ONNX) ---
   const loadHairModel = async () => {
     try {
@@ -550,8 +470,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     }
 
     maskCtx.putImageData(maskImageData, 0, 0);
-    // İstersen hairMaskDataUrl ile overlay de gösterebilirsin:
-    // const hairMaskDataUrl = maskCanvas.toDataURL('image/png');
 
     const hairCoverageRatio = hairPixelCount / totalPixelCount;
     const hairCoveragePercent = Math.round(hairCoverageRatio * 100);
@@ -562,7 +480,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     };
   };
 
-  // --- CAPTURE HANDLER ---
+  // --- CAPTURE HANDLER (ÖNCE BUNU TANIMLIYORUZ!) ---
   const handleCapture = useCallback(async () => {
     if (!videoRef.current || isCapturingRef.current) return;
     if (!currentStep) return;
@@ -642,6 +560,82 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     }
   }, [currentStep, currentStepIndex, capturedImages, isHairModelReady, onComplete, toast]);
 
+  // --- COUNTDOWN LOGIC (handleCapture ARTIK ÜSTTE TANIMLI) ---
+  const startCountdown = useCallback(() => {
+    if (status === 'countdown' || status === 'capturing') return;
+    if (isCapturingRef.current) return;
+
+    setStatus('countdown');
+    setCountdown(3);
+
+    let count = 3;
+
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+
+    countdownIntervalRef.current = setInterval(() => {
+      count--;
+      if (count > 0) {
+        setCountdown(count);
+      } else {
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        setCountdown(null);
+        handleCapture();
+      }
+    }, 1000);
+  }, [status, handleCapture]);
+
+  // --- MAIN LOOP RESULT HANDLER ---
+  const onResults = useCallback(
+    (results: any) => {
+      if (!isMountedRef.current || !currentStep) return;
+      setIsModelLoaded(true);
+
+      if (status === 'countdown' || status === 'capturing') return;
+
+      if (currentStep.guideType === 'manual') {
+        setStatus('locked');
+        setGuidanceMessage('Konumunuzu ayarlayıp bekleyin');
+        startCountdown();
+        return;
+      }
+
+      const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+
+      if (!hasFace) {
+        setStatus('searching');
+        setGuidanceMessage('Yüzünüzü çerçeveye yerleştirin');
+        return;
+      }
+
+      const landmarks = results.multiFaceLandmarks[0];
+      const pose = calculatePose(landmarks);
+      const target = currentStep.target!;
+
+      const yawDiff = pose.yaw - target.yaw;
+      const pitchDiff = pose.pitch - target.pitch;
+
+      const isYawGood = Math.abs(yawDiff) < target.tolerance;
+      const isPitchGood = Math.abs(pitchDiff) < target.tolerance;
+
+      if (isYawGood && isPitchGood) {
+        setStatus('locked');
+        setGuidanceMessage('Mükemmel! Kıpırdamayın.');
+        startCountdown();
+      } else {
+        setStatus('aligning');
+
+        if (!isYawGood) {
+          if (yawDiff > 0) setGuidanceMessage('Başınızı hafifçe SOLA çevirin');
+          else setGuidanceMessage('Başınızı hafifçe SAĞA çevirin');
+        } else if (!isPitchGood) {
+          if (pitchDiff > 0) setGuidanceMessage('Çenenizi biraz YUKARI kaldırın');
+          else setGuidanceMessage('Çenenizi biraz AŞAĞI indirin');
+        }
+      }
+    },
+    [currentStep, status, startCountdown],
+  );
+
   // CRITICAL FIX: Eğer step undefined ise (index out of bounds) render etme
   if (!currentStep) return null;
 
@@ -703,7 +697,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           </div>
           <button
             onClick={onCancel}
-            className="p-2 bg-white/10 rounded-full backdrop-blur-md hover:bg白/20 transition-colors"
+            className="p-2 bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors"
           >
             <X className="w-6 h-6" />
           </button>
