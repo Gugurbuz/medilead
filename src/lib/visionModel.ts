@@ -10,8 +10,6 @@ const HAIR_CLASS_INDEX = 17;
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 
-// ... (Geri kalan kodlar aynı kalabilir veya aşağıdakini kullanabilirsiniz) ...
-
 let sessionPromise: Promise<ort.InferenceSession> | null = null;
 
 const getSession = async (): Promise<ort.InferenceSession> => {
@@ -130,10 +128,16 @@ export const processHairImage = async (imageSource: string) => {
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const i = new Image();
-      i.crossOrigin = "Anonymous";
+      // FIX: Data URL'ler için crossOrigin ayarını atla
+      if (!imageSource.startsWith('data:')) {
+        i.crossOrigin = "Anonymous";
+      }
       i.src = imageSource;
       i.onload = () => resolve(i);
-      i.onerror = (e) => reject(e);
+      i.onerror = (e) => {
+        console.error("Image load failed details:", e);
+        reject(new Error("Failed to load image for processing."));
+      };
     });
 
     const session = await getSession();
