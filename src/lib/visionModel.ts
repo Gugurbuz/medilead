@@ -1,30 +1,22 @@
-import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js';
+import * as ort from 'onnxruntime-web';
 
 /**
- * Real ONNX Runtime Implementation for Hair Analysis
- * Bu modül, tarayıcı içinde gerçek yapay zeka çıkarımı (inference) yapar.
- * Model, Supabase Storage veya herhangi bir genel URL üzerinden yüklenir.
+ * BiSeNet Face Parsing ONNX Implementation
+ * Bu modül, özellikle "face_parsing_bisenet.onnx" modeli için yapılandırılmıştır.
  */
 
-// --- AYARLAR ---
-
-// ÖNEMLİ: Supabase Storage'a yüklediğiniz modelin "Public URL"ini buraya yapıştırın.
+// KULLANICI URL'Sİ (Lütfen bu linkin tarayıcıda çalıştığını teyit edin)
 const MODEL_PATH = 'https://uzootohvsanqlhijmkpn.supabase.co/storage/v1/object/public/models/face_parsing_bisenet.onnx';
 
-// Modelinizin giriş boyutu (Genellikle 224, 256, 512 veya 640 olur. Modelinize göre değiştirin.)
-const MODEL_INPUT_SIZE = 512;
+const MODEL_INPUT_SIZE = 512; // BiSeNet genellikle 512x512 çalışır
+const HAIR_CLASS_INDEX = 17;  // BiSeNet standart modelinde 'Saç' sınıfı ID'si 17'dir.
 
-// Maske oluşturma hassasiyeti (0.0 - 1.0 arası). 
-// 0.5 standarttır; daha düşük değerler daha fazla alanı saç olarak işaretler.
-const PROBABILITY_THRESHOLD = 0.5;
+// ImageNet Normalizasyon Değerleri (BiSeNet için gereklidir)
+const MEAN = [0.485, 0.456, 0.406];
+const STD = [0.229, 0.224, 0.225];
 
-// Global oturum değişkeni (Modelin her seferinde tekrar yüklenmesini engeller)
 let session: ort.InferenceSession | null = null;
 
-/**
- * Yardımcı Fonksiyon: Resmi depolama ve önizleme için yeniden boyutlandırır.
- * LocalStorage kotasını aşmamak için önemlidir.
- */
 const resizeImageForStorage = (img: HTMLImageElement, maxWidth = 800): string => {
   const canvas = document.createElement('canvas');
   let width = img.width;
@@ -38,163 +30,138 @@ const resizeImageForStorage = (img: HTMLImageElement, maxWidth = 800): string =>
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
-  
-  if (ctx) {
-    ctx.drawImage(img, 0, 0, width, height);
-  }
-  
+  if (ctx) ctx.drawImage(img, 0, 0, width, height);
   return canvas.toDataURL('image/jpeg', 0.8);
 };
 
-/**
- * ONNX Oturumunu Başlatır
- * Modeli URL'den indirir ve hazırlar.
- */
 const initSession = async () => {
-  if (session) {
-    return session;
-  }
-
+  if (session) return session;
   try {
-    // WebAssembly (WASM) dosyaları için yol ayarı gerekebilir, 
-    // ancak Vite genellikle node_modules üzerinden bunu çözer.
-    
-    // Oturumu oluştur
     session = await ort.InferenceSession.create(MODEL_PATH, {
-      executionProviders: ['webgl', 'wasm'], // Önce GPU (WebGL), olmazsa CPU (WASM) dener
+      executionProviders: ['webgl', 'wasm'],
       graphOptimizationLevel: 'all'
     });
-    
-    console.log('ONNX Session initialized successfully from URL');
+    console.log('BiSeNet Session initialized');
     return session;
   } catch (e) {
-    console.error('Failed to init ONNX session:', e);
-    throw new Error('Yapay zeka modeli sunucudan yüklenemedi. Lütfen internet bağlantınızı kontrol edin veya model URL\'sini doğrulayın.');
+    console.error('Model yükleme hatası:', e);
+    throw new Error('AI Modeli yüklenemedi. Linki ve dosya bütünlüğünü kontrol edin.');
   }
 };
 
 /**
- * Ön İşleme (Preprocessing)
- * Görüntüyü modelin beklediği tensör formatına (Float32Array) dönüştürür.
+ * Preprocess: ImageNet Normalizasyonu (Mean/Std çıkarma)
  */
 const preprocess = (image: HTMLImageElement, width: number, height: number): ort.Tensor => {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   
-  if (!ctx) {
-    throw new Error('Canvas context could not be created');
-  }
+  if (!ctx) throw new Error('Canvas context error');
   
   ctx.drawImage(image, 0, 0, width, height);
   const imageData = ctx.getImageData(0, 0, width, height);
   const { data } = imageData;
   
-  // Model girişi için Float32 dizisi oluştur (Batch x Channel x Height x Width)
   const inputTensor = new Float32Array(1 * 3 * width * height);
   
   for (let i = 0; i < width * height; i++) {
-    // RGB değerlerini 0-1 aralığına normalize et
-    // Not: Eğer modeliniz Mean/Std normalizasyonu gerektiriyorsa burayı düzenleyin.
+    // 0-255 arasını 0-1 arasına çek
     const r = data[i * 4] / 255.0;
     const g = data[i * 4 + 1] / 255.0;
     const b = data[i * 4 + 2] / 255.0;
 
-    // NCHW Formatı (Batch, Channel, Height, Width)
-    // Red kanalı
-    inputTensor[i] = r;
-    // Green kanalı
-    inputTensor[i + width * height] = g;
-    // Blue kanalı
-    inputTensor[i + 2 * width * height] = b;
+    // Standartizasyon: (Value - Mean) / Std
+    // NCHW Formatı: RRR...GGG...BBB...
+    inputTensor[i] = (r - MEAN[0]) / STD[0];
+    inputTensor[i + width * height] = (g - MEAN[1]) / STD[1];
+    inputTensor[i + 2 * width * height] = (b - MEAN[2]) / STD[2];
   }
 
-  // Tensör nesnesini oluştur
   return new ort.Tensor('float32', inputTensor, [1, 3, height, width]);
 };
 
 /**
- * Son İşleme (Postprocessing)
- * Model çıktısını (maskeyi) görselleştirilebilir bir resme dönüştürür.
+ * Postprocess: ArgMax işlemi ile Saç Sınıfını (17) Çıkarma
  */
 const postprocess = (
   outputTensor: ort.Tensor, 
   originalWidth: number, 
   originalHeight: number
 ) => {
-  const outputData = outputTensor.data as Float32Array;
-  
-  // Çıktı boyutunun model giriş boyutuyla (MODEL_INPUT_SIZE x MODEL_INPUT_SIZE) eşleştiğini varsayıyoruz.
-  // Model çıktısı genellikle düzleştirilmiş (flattened) bir dizidir.
-  const size = MODEL_INPUT_SIZE * MODEL_INPUT_SIZE;
-  
-  // 1. Ham maske verisi için geçici canvas
+  // BiSeNet Çıktısı: [1, 19, 512, 512] (Batch, Class, Height, Width)
+  const data = outputTensor.data as Float32Array;
+  const numClasses = 19; 
+  const height = MODEL_INPUT_SIZE;
+  const width = MODEL_INPUT_SIZE;
+  const size = height * width;
+
   const maskCanvas = document.createElement('canvas');
-  maskCanvas.width = MODEL_INPUT_SIZE;
-  maskCanvas.height = MODEL_INPUT_SIZE;
+  maskCanvas.width = width;
+  maskCanvas.height = height;
   const maskCtx = maskCanvas.getContext('2d');
-  
   if (!maskCtx) throw new Error('Mask context failed');
 
-  const maskImgData = maskCtx.createImageData(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
-  
+  const maskImgData = maskCtx.createImageData(width, height);
+
   let hairPixelCount = 0;
 
+  // ArgMax: Her piksel için en yüksek skora sahip sınıfı bul
   for (let i = 0; i < size; i++) {
-    // Model çıktısı olasılık (0-1) veya logit olabilir.
-    // Çoğu segmentasyon modeli sigmoid aktivasyonu uygulanmış 0-1 arası değer döner.
-    const prob = outputData[i]; 
-    
-    if (prob > PROBABILITY_THRESHOLD) {
+    let maxVal = -Infinity;
+    let maxClass = 0;
+
+    // Bu pikselin (i) tüm sınıflardaki (c) değerlerini kontrol et
+    for (let c = 0; c < numClasses; c++) {
+      // Veri düz bir dizidir. Offset hesabı: c * (H*W) + i
+      const val = data[c * size + i];
+      if (val > maxVal) {
+        maxVal = val;
+        maxClass = c;
+      }
+    }
+
+    // Eğer en baskın sınıf SAÇ (17) ise maskeyi boya
+    if (maxClass === HAIR_CLASS_INDEX) {
       hairPixelCount++;
-      // Saç bölgesi için Mavi renk
       maskImgData.data[i * 4] = 0;     // R
       maskImgData.data[i * 4 + 1] = 100; // G
       maskImgData.data[i * 4 + 2] = 255; // B
-      maskImgData.data[i * 4 + 3] = 160; // Alpha (Saydamlık)
+      maskImgData.data[i * 4 + 3] = 160; // Alpha
     } else {
-      // Saç olmayan bölge (Tamamen saydam)
-      maskImgData.data[i * 4 + 3] = 0; 
+      maskImgData.data[i * 4 + 3] = 0; // Transparent
     }
   }
-  
+
   maskCtx.putImageData(maskImgData, 0, 0);
 
-  // 2. Maskeyi orijinal resim boyutuna ölçekle
+  // Maskeyi orijinal boyuta büyüt
   const finalMaskCanvas = document.createElement('canvas');
   finalMaskCanvas.width = originalWidth;
   finalMaskCanvas.height = originalHeight;
   const finalCtx = finalMaskCanvas.getContext('2d');
-  
   if (!finalCtx) throw new Error('Final context failed');
-  
-  // Küçük maskeyi orijinal boyuta büyüt (Yumuşatma otomatik yapılır)
   finalCtx.drawImage(maskCanvas, 0, 0, originalWidth, originalHeight);
 
-  // 3. Yoğunluk Haritası (Heatmap) Oluşturma
-  // Şimdilik maskeyi temel alıyoruz, ileride model belirsizliği (uncertainty) eklenebilir.
+  // Heatmap Simülasyonu
   const heatCanvas = document.createElement('canvas');
   heatCanvas.width = originalWidth;
   heatCanvas.height = originalHeight;
   const heatCtx = heatCanvas.getContext('2d');
-  
   if (heatCtx) {
     heatCtx.globalAlpha = 0.6;
     heatCtx.drawImage(finalMaskCanvas, 0, 0);
   }
 
-  // 4. Yoğunluk Skoru Hesaplama
-  // Basit bir metrik: Maskelenen alanın toplam alana oranı.
-  // Gerçekçi bir yoğunluk için sadece kafa derisi alanı (ROI) dikkate alınmalıdır.
-  // Burada kaba bir tahmin yapıyoruz (Tüm resmin %40'ı kafa varsayımıyla).
-  const estimatedHeadArea = size * 0.4;
-  const densityRaw = (hairPixelCount / estimatedHeadArea) * 100;
-  const densityScore = Math.min(100, Math.round(densityRaw)); 
+  // Yoğunluk Skoru (Basit oran)
+  // Kafanın tamamı yerine görüntü alanına göre oranlıyoruz
+  const densityRaw = (hairPixelCount / (size * 0.3)) * 100; 
+  const densityScore = Math.min(100, Math.round(densityRaw));
 
-  let coverageLabel = 'Low Density';
-  if (densityScore > 80) coverageLabel = 'High Density';
-  else if (densityScore > 50) coverageLabel = 'Moderate';
+  let coverageLabel = 'Düşük Yoğunluk';
+  if (densityScore > 80) coverageLabel = 'Yüksek Yoğunluk';
+  else if (densityScore > 50) coverageLabel = 'Orta Yoğunluk';
 
   return {
     segmentationMask: finalMaskCanvas.toDataURL('image/png'),
@@ -204,66 +171,44 @@ const postprocess = (
   };
 };
 
-/**
- * Uygulamanın çağırdığı ana fonksiyon
- * @param photo - İşlenecek fotoğraf nesnesi
- */
 export const processHairImage = async (photo: any) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // 1. Resmi Yükle
       const img = new Image();
-      img.crossOrigin = "Anonymous"; // CORS sorunlarını önlemek için
+      img.crossOrigin = "Anonymous";
       img.src = photo.preview;
 
       img.onload = async () => {
         try {
-          // Oturumu Başlat (Varsa önbellekten, yoksa URL'den)
           const sess = await initSession();
-
-          // 2. Resmi Hazırla (Preprocess)
+          
+          // Preprocess (ImageNet normalization)
           const tensor = preprocess(img, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
 
-          // 3. Modeli Çalıştır (Inference)
-          // Modelin giriş ve çıkış isimlerini otomatik bulmaya çalışıyoruz.
+          // Inference
           const feeds: Record<string, ort.Tensor> = {};
-          const inputNames = sess.inputNames;
+          feeds[sess.inputNames[0]] = tensor;
           
-          // Genellikle ilk giriş 'input' veya 'images' olur
-          feeds[inputNames[0]] = tensor;
-
           const results = await sess.run(feeds);
-
-          // 4. Çıktıyı Al
-          const outputName = sess.outputNames[0];
-          const outputTensor = results[outputName];
-
-          // 5. Sonuçları İşle (Postprocess)
+          
+          // Postprocess (ArgMax)
+          const outputTensor = results[sess.outputNames[0]];
           const processedData = postprocess(outputTensor, img.width, img.height);
           
-          // Depolama için orijinal resmi optimize et
-          const optimizedBase = resizeImageForStorage(img);
-
-          // Sonuç nesnesini döndür
           resolve({
             ...photo,
-            preview: optimizedBase,
+            preview: resizeImageForStorage(img),
             processed: processedData
           });
 
         } catch (error) {
-          console.error("AI Inference error:", error);
+          console.error("Inference Error:", error);
           reject(error);
         }
       };
 
-      img.onerror = (err) => {
-        console.error("Image failed to load for AI processing", err);
-        reject(new Error("Resim yüklenemedi. Dosya bozuk veya formatı desteklenmiyor olabilir."));
-      };
-
+      img.onerror = () => reject(new Error("Resim yüklenemedi."));
     } catch (e) {
-      console.error("General processing error:", e);
       reject(e);
     }
   });
