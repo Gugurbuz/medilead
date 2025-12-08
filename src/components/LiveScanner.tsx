@@ -6,7 +6,7 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 
-// --- TİP TANIMLAMALARI (CDN için) ---
+// --- TYPE DEFINITIONS (Global) ---
 declare global {
   interface Window {
     FaceMesh: any;
@@ -14,52 +14,53 @@ declare global {
   }
 }
 
-// --- CONFIGURATION ---
+// --- CONFIGURATION (ENGLISH) ---
 const SCAN_STEPS = [
   { 
     id: 'front', 
-    label: 'Ön Görünüm', 
-    instruction: 'Kameraya Düz Bakın', 
+    label: 'Front View', 
+    instruction: 'Look directly at the camera', 
     target: { yaw: 0, pitch: 10, roll: 0, yawTolerance: 15, pitchTolerance: 20 }, 
     guideType: 'face'
   },
   { 
     id: 'left', 
-    label: 'Sağ Profil', 
-    instruction: 'Başınızı Yavaşça SOLA Çevirin', 
+    label: 'Right Profile', 
+    instruction: 'Turn your head slowly to the LEFT', 
     target: { yaw: -85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
     guideType: 'face'
   },
   { 
     id: 'right', 
-    label: 'Sol Profil', 
-    instruction: 'Başınızı Yavaşça SAĞA Çevirin', 
+    label: 'Left Profile', 
+    instruction: 'Turn your head slowly to the RIGHT', 
     target: { yaw: 85, pitch: 10, roll: 0, yawTolerance: 10, pitchTolerance: 40 }, 
     guideType: 'face'
   },
   { 
     id: 'top', 
-    label: 'Tepe Görünümü', 
-    instruction: 'Başınızı Öne Eğerek Tepeyi Gösterin', 
+    label: 'Top View', 
+    instruction: 'Tilt your head DOWN', 
     target: { yaw: 0, pitch: 90, roll: 0, yawTolerance: 20, pitchTolerance: 25 }, 
     guideType: 'face'
   },
   { 
     id: 'back', 
-    label: 'Donör Bölge (Ense)', 
-    instruction: 'Arkanızı Dönün', 
+    label: 'Donor Area', 
+    instruction: 'Turn around (Show back of head)', 
     target: null, 
     guideType: 'manual'
   },
 ];
 
+// AR Hair Styles (English)
 const HAIR_STYLES: Record<string, { label: string; curvature: number; height: number }> = {
-  young: { label: 'Genç', curvature: 0.8, height: 0 },
-  mature: { label: 'Olgun', curvature: 1.5, height: -15 },
-  straight: { label: 'Düz', curvature: 0.1, height: 5 },
+  young: { label: 'Youthful', curvature: 0.8, height: 0 },
+  mature: { label: 'Mature', curvature: 1.5, height: -15 },
+  straight: { label: 'Straight', curvature: 0.1, height: 5 },
 };
 
-// --- CDN SCRIPT YÜKLEYİCİ ---
+// --- CDN SCRIPT LOADER ---
 const loadScript = (src: string) => {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -90,7 +91,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [capturedImages, setCapturedImages] = useState<any[]>([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
-  const [forceManualMode, setForceManualMode] = useState(false); // Sadece manuel butonla aktif olur
+  const [forceManualMode, setForceManualMode] = useState(false);
   
   // Tracking
   const [pose, setPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
@@ -113,7 +114,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
-  // --- TTS (SESLİ ASİSTAN) ---
+  // --- TTS (TEXT TO SPEECH - ENGLISH) ---
   const speak = useCallback((text: string, force = false) => {
     if (!voiceEnabled || !window.speechSynthesis) return;
     
@@ -122,7 +123,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'tr-TR';
+    utterance.lang = 'en-US'; // Changed to English
     utterance.rate = 1.0;
     
     window.speechSynthesis.speak(utterance);
@@ -169,13 +170,14 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     ctx.shadowBlur = 4;
     ctx.stroke();
     
+    // Anchor points
     ctx.fillStyle = '#4ade80';
     ctx.beginPath(); ctx.arc(mx, my + totalOffsetY, 4, 0, 2*Math.PI); ctx.fill();
     
     ctx.restore();
   };
 
-  // --- HESAPLAMA MANTIĞI ---
+  // --- POSE CALCULATION ---
   const calculatePose = (landmarks: any) => {
     if (!landmarks) return null;
     const nose = landmarks[1];
@@ -206,7 +208,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
-  // --- SONUÇ İŞLEME MANTIĞI ---
+  // --- RESULTS PROCESSING ---
   const onResults = useCallback((results: any) => {
     if (!isMountedRef.current || status === 'capturing') return;
     if (!isModelLoaded) setIsModelLoaded(true);
@@ -230,7 +232,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           setIsLowLight(lowLight);
           
           if (lowLight && voiceEnabled && Math.random() > 0.98) {
-             speak("Lütfen ışığa dönün");
+             speak("Please turn to the light");
           }
       }
     }
@@ -257,18 +259,19 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
 
-    // 3. Manual Step Logic
+    // 3. Manual Step Logic (Back View)
     if (currentStep.guideType === 'manual' || forceManualMode) {
       if (forceManualMode) {
           setStatus('locked');
       } else if (!hasFace && !isLowLight) {
+          // Success: No face detected (assuming back of head)
           setStatus('locked');
           setScanProgress(prev => Math.min(prev + 1.5, 100));
-          if (scanProgress > 80) speak("Harika, kıpırdamayın");
+          if (scanProgress > 80) speak("Perfect, hold still");
       } else {
           setScanProgress(0);
           if (hasFace) setStatus('aligning'); 
-          if (hasFace) speak("Lütfen arkanızı dönün");
+          if (hasFace) speak("Please turn around");
       }
       return;
     }
@@ -306,18 +309,19 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       if (scanProgress < 100) setScanProgress(prev => prev + 3); 
       
       if (scanProgress > 80 && status !== 'locked') {
-         speak("Harika, kıpırdamayın", true);
+         speak("Perfect, hold still", true);
       }
     } else {
       setStatus('aligning');
       setScanProgress(prev => Math.max(0, prev - 5)); 
       
+      // Voice Guidance (English)
       if (Math.abs(yawDiff) > yawTolerance) {
-          if (yawDiff > 0) speak("Sola dönün");
-          else speak("Sağa dönün");
+          if (yawDiff > 0) speak("Turn Left");
+          else speak("Turn Right");
       } else if (Math.abs(pitchDiff) > pitchTolerance) {
-          if (pitchDiff > 0) speak("Yukarı bakın");
-          else speak("Aşağı bakın");
+          if (pitchDiff > 0) speak("Look Up");
+          else speak("Look Down");
       }
     }
 
@@ -327,7 +331,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     onResultsRef.current = onResults;
   }, [onResults]);
 
-  // --- INIT (CDN SCRIPT YÜKLEME) ---
+  // --- INIT ---
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -372,15 +376,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         }
 
       } catch (error) {
-        console.error("Başlatma hatası:", error);
-        // Otomatik geçiş İPTAL EDİLDİ
-        toast({ title: "Kamera Başlatılamadı", description: "Lütfen sayfayı yenileyin veya izinleri kontrol edin.", variant: "destructive" });
+        console.error("Init Error:", error);
+        toast({ title: "Camera Error", description: "Please refresh or check permissions.", variant: "destructive" });
       }
     };
 
     init();
-
-    // ZAMAN AŞIMI (TIMEOUT) İPTAL EDİLDİ (Artık sonsuza kadar bekler)
+    // NO AUTO MANUAL MODE SWITCHING (As requested)
 
     setTimeout(() => speak(currentStep.instruction), 1000);
 
@@ -426,6 +428,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         
         setCapturedImages(prev => [...prev, newPhoto]);
 
+        // Flash
         const flash = document.createElement('div');
         flash.className = 'fixed inset-0 bg-white z-[60] animate-out fade-out duration-500 pointer-events-none';
         document.body.appendChild(flash);
@@ -462,7 +465,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         <div className="pointer-events-auto flex flex-col gap-2">
           <div className="flex items-center gap-2 mb-1">
              <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-medium tracking-wider uppercase backdrop-blur-md">
-               ADIM {currentStepIndex + 1}/{SCAN_STEPS.length}
+               Step {currentStepIndex + 1}/{SCAN_STEPS.length}
              </span>
              <Button
                variant="ghost" 
@@ -488,7 +491,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         {!isModelLoaded && !forceManualMode && (
           <div className="absolute z-30 flex flex-col items-center text-white/70">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
-            <p>AI Sistemi Başlatılıyor...</p>
+            <p>Initializing AI System...</p>
           </div>
         )}
 
@@ -521,7 +524,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                         />
                     </div>
                     <span className="text-[10px] text-white/70 font-medium uppercase rotate-[-90deg] mt-4 whitespace-nowrap">
-                        Saç Çizgisi
+                        Hairline
                     </span>
                 </div>
             </div>
@@ -535,7 +538,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                 className="absolute top-24 left-1/2 -translate-x-1/2 bg-amber-500/90 text-white px-6 py-2 rounded-full flex items-center gap-2 z-40 shadow-lg backdrop-blur-sm"
             >
                 <Sun className="w-5 h-5 animate-pulse" />
-                <span className="font-bold text-sm">Lütfen ışığa dönün</span>
+                <span className="font-bold text-sm">Please turn to the light</span>
             </motion.div>
         )}
         
@@ -565,7 +568,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-[2px] z-20">
                     <User className="w-16 h-16 text-white/50 mb-2" />
                     <span className="bg-red-500/80 text-white px-3 py-1 rounded-full text-sm font-bold">
-                      Yüz Aranıyor...
+                      Face not found...
                     </span>
                   </div>
                 )}
@@ -582,11 +585,11 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
                <h3 className="text-xl font-bold text-white">{currentStep.instruction}</h3>
                {status === 'locked' && (
                  <p className="text-green-400 text-sm mt-1 font-bold tracking-wider animate-pulse uppercase">
-                   Harika, kıpırdamayın
+                   Perfect, hold still
                  </p>
                )}
                {forceManualMode && (
-                   <p className="text-amber-400 text-xs mt-1">(Manuel Mod Aktif)</p>
+                   <p className="text-amber-400 text-xs mt-1">(Manual Mode Active)</p>
                )}
               </motion.div>
           </div>
