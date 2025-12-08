@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
+
 // --- TİP VE SABİTLER ---
 
 interface ScanStep {
@@ -15,6 +16,16 @@ interface ScanStep {
   target: { yaw: number; pitch: number; roll: number; tolerance: number } | null;
   guideType: 'face' | 'manual';
   guideShape: 'oval' | 'circle' | 'rect';
+}
+
+interface CapturedPhoto {
+  id: number;
+  preview: string;
+  type: string;
+  hairAnalysis?: {
+    hairCoverageRatio: number; // 0-1
+    hairCoveragePercent: number; // 0-100
+  };
 }
 
 const SCAN_STEPS: ScanStep[] = [
@@ -65,7 +76,7 @@ const SCAN_STEPS: ScanStep[] = [
   },
 ];
 
-// Helper: Script Yükleyici
+// Helper: Script Yükleyici (MediaPipe için)
 const loadScript = (src: string) => {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -127,7 +138,7 @@ const GuideOverlay = ({ shape, status }: { shape: string, status: string }) => {
 };
 
 interface LiveScannerProps {
-  onComplete: (photos: any[]) => void;
+  onComplete: (photos: CapturedPhoto[]) => void;
   onCancel: () => void;
 }
 
@@ -137,9 +148,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   // State
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [capturedImages, setCapturedImages] = useState<any[]>([]);
-  const [isModelLoaded, setIsModelLoaded] = useState(false);
-  
+  const [capturedImages, setCapturedImages] = useState<CapturedPhoto[]>([]);
+  const [isModelLoaded, setIsModelLoaded] = useState(false); // FaceMesh için
+
+  // Hair segmentation modeli için state
+  const [isHairModelReady, setIsHairModelReady] = useState(false);
+  const hairSessionRef = useRef<ort.InferenceSession | null>(null);
+
   // Logic State
   const [status, setStatus] = useState<'searching' | 'aligning' | 'locked' | 'countdown' | 'capturing'>('searching'); 
   const [guidanceMessage, setGuidanceMessage] = useState("");
@@ -161,8 +176,8 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   useEffect(() => {
     isMountedRef.current = true;
     startCamera();
-    
     startManualButtonTimer();
+    loadHairModel(); // ONNX saç modeli burada yükleniyor
 
     return () => {
       isMountedRef.current = false;
@@ -227,7 +242,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     }
   };
 
-  // --- AI LOGIC ---
+  // --- FACE MESH AI LOGIC ---
   const initializeAI = async () => {
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
@@ -346,10 +361,150 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       }
     }
 
-  }, [currentStep, status]);
+  }, [currentStep, status, startCountdown]);
+
+  // --- HAIR MODEL LOAD (ONNX) ---
+  const loadHairModel = async () => {
+    try {
+      // face_parsing_bisenet.onnx dosyasını /public/models altına koyduğunu varsayıyorum
+      const session = await ort.InferenceSession.create('/models/face_parsing_bisenet.onnx', {
+        executionProviders: ['wasm'],
+      });
+      hairSessionRef.current = session;
+      setIsHairModelReady(true);
+      console.log('Hair segmentation model yüklendi');
+    } catch (error) {
+      console.error('Hair segmentation modeli yüklenemedi:', error);
+      setIsHairModelReady(false);
+    }
+  };
+
+  // --- HAIR SEGMENTATION & ANALYSIS ---
+  const runHairSegmentation = async (dataUrl: string) => {
+    if (!hairSessionRef.current) {
+      console.warn('Hair model hazır değil');
+      return null;
+    }
+
+    // BiSeNet genelde 512x512 input alıyor
+    const INPUT_SIZE = 512;
+    const HAIR_CLASS_ID = 10; // Bu modelde saç class id
+
+    // 1. DataURL'den Image oluştur
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+      image.onload = () => resolve(image);
+      image.onerror = (err) => reject(err);
+      image.src = dataUrl;
+    });
+
+    // 2. Canvas üzerinde resize et
+    const canvas = document.createElement('canvas');
+    canvas.width = INPUT_SIZE;
+    canvas.height = INPUT_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.drawImage(img, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    const imageData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+    const { data } = imageData;
+
+    // 3. Onnx input tensor (1,3,H,W) - BGR, 0-1 scale
+    const floatData = new Float32Array(1 * 3 * INPUT_SIZE * INPUT_SIZE);
+
+    for (let y = 0; y < INPUT_SIZE; y++) {
+      for (let x = 0; x < INPUT_SIZE; x++) {
+        const idx = (y * INPUT_SIZE + x) * 4;
+        const r = data[idx] / 255.0;
+        const g = data[idx + 1] / 255.0;
+        const b = data[idx + 2] / 255.0;
+
+        const offset = y * INPUT_SIZE + x;
+
+        // BGR sıralaması
+        floatData[0 * INPUT_SIZE * INPUT_SIZE + offset] = b;
+        floatData[1 * INPUT_SIZE * INPUT_SIZE + offset] = g;
+        floatData[2 * INPUT_SIZE * INPUT_SIZE + offset] = r;
+      }
+    }
+
+    const session = hairSessionRef.current;
+    const feeds: Record<string, ort.Tensor> = {};
+    const inputName = session.inputNames[0];
+    feeds[inputName] = new ort.Tensor('float32', floatData, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+
+    // 4. Model çalıştır
+    const results = await session.run(feeds);
+    const outputName = session.outputNames[0];
+    const output = results[outputName];
+
+    if (!output) return null;
+
+    // Çoğu face parsing modelinde output shape: [1, C, H, W]
+    const [n, c, h, w] = output.dims;
+    const scores = output.data as Float32Array;
+
+    let hairPixelCount = 0;
+    let totalPixelCount = h * w;
+
+    // Saç maskesini ayrıca görselleştirmek istersen:
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const maskCtx = maskCanvas.getContext('2d');
+    if (!maskCtx) return null;
+    const maskImageData = maskCtx.createImageData(w, h);
+    const maskData = maskImageData.data;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        let maxVal = -Infinity;
+        let maxClass = 0;
+
+        // Her piksel için tüm class skorları
+        for (let ci = 0; ci < c; ci++) {
+          const score = scores[ci * h * w + idx];
+          if (score > maxVal) {
+            maxVal = score;
+            maxClass = ci;
+          }
+        }
+
+        const maskIdx = idx * 4;
+        if (maxClass === HAIR_CLASS_ID) {
+          // Saç piksellerini yeşil yap
+          maskData[maskIdx] = 0;
+          maskData[maskIdx + 1] = 255;
+          maskData[maskIdx + 2] = 0;
+          maskData[maskIdx + 3] = 180; // yarı saydam
+          hairPixelCount++;
+        } else {
+          // Arka planı transparan bırak
+          maskData[maskIdx] = 0;
+          maskData[maskIdx + 1] = 0;
+          maskData[maskIdx + 2] = 0;
+          maskData[maskIdx + 3] = 0;
+        }
+      }
+    }
+
+    maskCtx.putImageData(maskImageData, 0, 0);
+    const hairMaskDataUrl = maskCanvas.toDataURL('image/png');
+
+    const hairCoverageRatio = hairPixelCount / totalPixelCount;
+    const hairCoveragePercent = Math.round(hairCoverageRatio * 100);
+
+    return {
+      hairCoverageRatio,
+      hairCoveragePercent,
+      hairMaskDataUrl,
+    };
+  };
 
   // --- CAPTURE HANDLER ---
-  const handleCapture = useCallback(() => {
+  const handleCapture = useCallback(async () => {
     // Çift tıklama ve bellek sızıntısı koruması
     if (!videoRef.current || isCapturingRef.current) return;
     if (!currentStep) return;
@@ -370,13 +525,46 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       
       const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
 
-      const newPhoto = {
+      // Önce foto nesnesi
+      const basePhoto: CapturedPhoto = {
         id: Date.now(),
         preview: dataUrl,
         type: currentStep.id
       };
-      
-      setCapturedImages(prev => [...prev, newPhoto]);
+
+      let finalPhoto = basePhoto;
+
+      // Saç segmentasyonu varsa çalıştır
+      if (isHairModelReady) {
+        try {
+          const hairResult = await runHairSegmentation(dataUrl);
+          if (hairResult) {
+            finalPhoto = {
+              ...basePhoto,
+              hairAnalysis: {
+                hairCoverageRatio: hairResult.hairCoverageRatio,
+                hairCoveragePercent: hairResult.hairCoveragePercent,
+              },
+            };
+
+            toast({
+              title: "Saç Analizi Tamamlandı",
+              description: `Tahmini saç yoğunluğu: %${hairResult.hairCoveragePercent}`,
+            });
+          }
+        } catch (error) {
+          console.error('Saç segmentasyonunda hata:', error);
+          toast({
+            title: "Saç Analizi Hatası",
+            description: "Saç segmentasyonu sırasında bir hata oluştu.",
+            variant: 'destructive',
+          });
+        }
+      } else {
+        console.warn('Hair model ready değil, sadece foto kaydediliyor');
+      }
+
+      setCapturedImages(prev => [...prev, finalPhoto]);
       
       // Flash effect
       const flash = document.createElement('div');
@@ -392,12 +580,12 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
           if (currentStepIndex < SCAN_STEPS.length - 1) {
             setCurrentStepIndex(prev => prev + 1);
           } else {
-            onComplete([...capturedImages, newPhoto]);
+            onComplete([...capturedImages, finalPhoto]);
           }
         }
       }, 1000);
     }
-  }, [currentStep, currentStepIndex, capturedImages, onComplete, toast]);
+  }, [currentStep, currentStepIndex, capturedImages, isHairModelReady, onComplete, toast]);
 
   // --- COUNTDOWN LOGIC ---
   const startCountdown = useCallback(() => {
