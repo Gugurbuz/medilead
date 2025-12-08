@@ -1,12 +1,31 @@
+import * as ort from 'onnxruntime-web';
 
 /**
- * Simulates a Vision Transformer (ViT) hair segmentation model.
- * Provides frontend-only approximation of AI analysis using canvas pixel manipulation.
- * Optimized for specific view angles (Front, Side, Top, Back) to exclude facial features.
+ * Real ONNX Runtime Implementation for Hair Analysis
+ * Bu modül, tarayıcı içinde gerçek yapay zeka çıkarımı (inference) yapar.
+ * Model, Supabase Storage veya herhangi bir genel URL üzerinden yüklenir.
  */
 
-// Helper to resize images to prevent localStorage quota exceeded errors
-const resizeImageForStorage = (img, maxWidth = 800) => {
+// --- AYARLAR ---
+
+// ÖNEMLİ: Supabase Storage'a yüklediğiniz modelin "Public URL"ini buraya yapıştırın.
+const MODEL_PATH = 'https://sizin-proje-id.supabase.co/storage/v1/object/public/models/hair_segmentation.onnx';
+
+// Modelinizin giriş boyutu (Genellikle 224, 256, 512 veya 640 olur. Modelinize göre değiştirin.)
+const MODEL_INPUT_SIZE = 512;
+
+// Maske oluşturma hassasiyeti (0.0 - 1.0 arası). 
+// 0.5 standarttır; daha düşük değerler daha fazla alanı saç olarak işaretler.
+const PROBABILITY_THRESHOLD = 0.5;
+
+// Global oturum değişkeni (Modelin her seferinde tekrar yüklenmesini engeller)
+let session: ort.InferenceSession | null = null;
+
+/**
+ * Yardımcı Fonksiyon: Resmi depolama ve önizleme için yeniden boyutlandırır.
+ * LocalStorage kotasını aşmamak için önemlidir.
+ */
+const resizeImageForStorage = (img: HTMLImageElement, maxWidth = 800): string => {
   const canvas = document.createElement('canvas');
   let width = img.width;
   let height = img.height;
@@ -19,217 +38,233 @@ const resizeImageForStorage = (img, maxWidth = 800) => {
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0, width, height);
+  
+  if (ctx) {
+    ctx.drawImage(img, 0, 0, width, height);
+  }
+  
   return canvas.toDataURL('image/jpeg', 0.8);
 };
 
-// Robust Skin Detection Algorithm
-const isSkinPixel = (r, g, b) => {
-  // RGB Rule
-  const isSkinRGB = (r > 95) && (g > 40) && (b > 20) &&
-                    ((Math.max(r, g, b) - Math.min(r, g, b)) > 15) &&
-                    (Math.abs(r - g) > 15) &&
-                    (r > g) && (r > b);
-  
-  // YCbCr Rule (Approximate conversion for better robustness)
-  const Cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
-  const Cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
-  const isSkinYCbCr = (Cb > 80 && Cb < 127) && (Cr > 133 && Cr < 173);
-  
-  return isSkinRGB || isSkinYCbCr;
+/**
+ * ONNX Oturumunu Başlatır
+ * Modeli URL'den indirir ve hazırlar.
+ */
+const initSession = async () => {
+  if (session) {
+    return session;
+  }
+
+  try {
+    // WebAssembly (WASM) dosyaları için yol ayarı gerekebilir, 
+    // ancak Vite genellikle node_modules üzerinden bunu çözer.
+    
+    // Oturumu oluştur
+    session = await ort.InferenceSession.create(MODEL_PATH, {
+      executionProviders: ['webgl', 'wasm'], // Önce GPU (WebGL), olmazsa CPU (WASM) dener
+      graphOptimizationLevel: 'all'
+    });
+    
+    console.log('ONNX Session initialized successfully from URL');
+    return session;
+  } catch (e) {
+    console.error('Failed to init ONNX session:', e);
+    throw new Error('Yapay zeka modeli sunucudan yüklenemedi. Lütfen internet bağlantınızı kontrol edin veya model URL\'sini doğrulayın.');
+  }
 };
 
-export const processHairImage = async (photo) => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "Anonymous";
-    img.src = photo.preview;
+/**
+ * Ön İşleme (Preprocessing)
+ * Görüntüyü modelin beklediği tensör formatına (Float32Array) dönüştürür.
+ */
+const preprocess = (image: HTMLImageElement, width: number, height: number): ort.Tensor => {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  
+  if (!ctx) {
+    throw new Error('Canvas context could not be created');
+  }
+  
+  ctx.drawImage(image, 0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  
+  // Model girişi için Float32 dizisi oluştur (Batch x Channel x Height x Width)
+  const inputTensor = new Float32Array(1 * 3 * width * height);
+  
+  for (let i = 0; i < width * height; i++) {
+    // RGB değerlerini 0-1 aralığına normalize et
+    // Not: Eğer modeliniz Mean/Std normalizasyonu gerektiriyorsa burayı düzenleyin.
+    const r = data[i * 4] / 255.0;
+    const g = data[i * 4 + 1] / 255.0;
+    const b = data[i * 4 + 2] / 255.0;
 
-    img.onload = () => {
-      try {
-        // 1. Create optimized base image
-        const optimizedBase = resizeImageForStorage(img);
+    // NCHW Formatı (Batch, Channel, Height, Width)
+    // Red kanalı
+    inputTensor[i] = r;
+    // Green kanalı
+    inputTensor[i + width * height] = g;
+    // Blue kanalı
+    inputTensor[i + 2 * width * height] = b;
+  }
 
-        // 2. Setup processing canvas (512x512 standard input for ViT models)
-        const width = 512;
-        const height = 512;
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const data = imageData.data;
-        
-        // Overlay Buffers
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = width;
-        maskCanvas.height = height;
-        const maskCtx = maskCanvas.getContext('2d');
-        const maskData = maskCtx.createImageData(width, height);
+  // Tensör nesnesini oluştur
+  return new ort.Tensor('float32', inputTensor, [1, 3, height, width]);
+};
 
-        const heatCanvas = document.createElement('canvas');
-        heatCanvas.width = width;
-        heatCanvas.height = height;
-        const heatCtx = heatCanvas.getContext('2d');
-        const heatData = heatCtx.createImageData(width, height);
+/**
+ * Son İşleme (Postprocessing)
+ * Model çıktısını (maskeyi) görselleştirilebilir bir resme dönüştürür.
+ */
+const postprocess = (
+  outputTensor: ort.Tensor, 
+  originalWidth: number, 
+  originalHeight: number
+) => {
+  const outputData = outputTensor.data as Float32Array;
+  
+  // Çıktı boyutunun model giriş boyutuyla (MODEL_INPUT_SIZE x MODEL_INPUT_SIZE) eşleştiğini varsayıyoruz.
+  // Model çıktısı genellikle düzleştirilmiş (flattened) bir dizidir.
+  const size = MODEL_INPUT_SIZE * MODEL_INPUT_SIZE;
+  
+  // 1. Ham maske verisi için geçici canvas
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = MODEL_INPUT_SIZE;
+  maskCanvas.height = MODEL_INPUT_SIZE;
+  const maskCtx = maskCanvas.getContext('2d');
+  
+  if (!maskCtx) throw new Error('Mask context failed');
 
-        let hairPixelCount = 0;
-        let scalpRegionPixelCount = 0;
+  const maskImgData = maskCtx.createImageData(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+  
+  let hairPixelCount = 0;
 
-        // Geometric Constants
-        const cx = width / 2;
-        const cy = height / 2;
-        
-        // Determine View Type logic
-        const type = (photo.type || 'front').toLowerCase();
-        
-        // Loop through every pixel
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const i = (y * width + x) * 4;
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
+  for (let i = 0; i < size; i++) {
+    // Model çıktısı olasılık (0-1) veya logit olabilir.
+    // Çoğu segmentasyon modeli sigmoid aktivasyonu uygulanmış 0-1 arası değer döner.
+    const prob = outputData[i]; 
+    
+    if (prob > PROBABILITY_THRESHOLD) {
+      hairPixelCount++;
+      // Saç bölgesi için Mavi renk
+      maskImgData.data[i * 4] = 0;     // R
+      maskImgData.data[i * 4 + 1] = 100; // G
+      maskImgData.data[i * 4 + 2] = 255; // B
+      maskImgData.data[i * 4 + 3] = 160; // Alpha (Saydamlık)
+    } else {
+      // Saç olmayan bölge (Tamamen saydam)
+      maskImgData.data[i * 4 + 3] = 0; 
+    }
+  }
+  
+  maskCtx.putImageData(maskImgData, 0, 0);
 
-            // ---------------------------------------------------------
-            // 1. Geometric Filtering (ROI) - Exclude Face/Background
-            // ---------------------------------------------------------
-            let isInsideROI = false;
-            let isFaceExclusion = false;
+  // 2. Maskeyi orijinal resim boyutuna ölçekle
+  const finalMaskCanvas = document.createElement('canvas');
+  finalMaskCanvas.width = originalWidth;
+  finalMaskCanvas.height = originalHeight;
+  const finalCtx = finalMaskCanvas.getContext('2d');
+  
+  if (!finalCtx) throw new Error('Final context failed');
+  
+  // Küçük maskeyi orijinal boyuta büyüt (Yumuşatma otomatik yapılır)
+  finalCtx.drawImage(maskCanvas, 0, 0, originalWidth, originalHeight);
 
-            // Normalize coordinates (-1 to 1)
-            const nx = (x - cx) / (width / 2);
-            const ny = (y - cy) / (height / 2);
+  // 3. Yoğunluk Haritası (Heatmap) Oluşturma
+  // Şimdilik maskeyi temel alıyoruz, ileride model belirsizliği (uncertainty) eklenebilir.
+  const heatCanvas = document.createElement('canvas');
+  heatCanvas.width = originalWidth;
+  heatCanvas.height = originalHeight;
+  const heatCtx = heatCanvas.getContext('2d');
+  
+  if (heatCtx) {
+    heatCtx.globalAlpha = 0.6;
+    heatCtx.drawImage(finalMaskCanvas, 0, 0);
+  }
 
-            if (type.includes('front')) {
-              // Head Ellipse
-              const headDist = (nx*nx)/(0.65*0.65) + (ny*ny)/(0.8*0.8);
-              if (headDist < 1) isInsideROI = true;
+  // 4. Yoğunluk Skoru Hesaplama
+  // Basit bir metrik: Maskelenen alanın toplam alana oranı.
+  // Gerçekçi bir yoğunluk için sadece kafa derisi alanı (ROI) dikkate alınmalıdır.
+  // Burada kaba bir tahmin yapıyoruz (Tüm resmin %40'ı kafa varsayımıyla).
+  const estimatedHeadArea = size * 0.4;
+  const densityRaw = (hairPixelCount / estimatedHeadArea) * 100;
+  const densityScore = Math.min(100, Math.round(densityRaw)); 
 
-              // Explicit Face Exclusion (Oval in lower center)
-              // Center roughly at (0, 0.2) relative
-              const fx = nx;
-              const fy = ny - 0.25;
-              const faceDist = (fx*fx)/(0.45*0.45) + (fy*fy)/(0.55*0.55);
-              if (faceDist < 1) isFaceExclusion = true;
+  let coverageLabel = 'Low Density';
+  if (densityScore > 80) coverageLabel = 'High Density';
+  else if (densityScore > 50) coverageLabel = 'Moderate';
 
-            } else if (type.includes('side') || type.includes('left') || type.includes('right')) {
-              // Side View: Focus on top and back
-              // Assuming facing left or right, exclude front face region
-              const headDist = (nx*nx)/(0.75*0.75) + (ny*ny)/(0.8*0.8);
-              if (headDist < 1) isInsideROI = true;
-              
-              // Exclude lower front quadrant roughly
-              if (ny > 0 && Math.abs(nx) > 0.3) isFaceExclusion = true;
+  return {
+    segmentationMask: finalMaskCanvas.toDataURL('image/png'),
+    densityHeatmap: heatCanvas.toDataURL('image/png'),
+    densityScore: densityScore,
+    coverageLabel: coverageLabel
+  };
+};
 
-            } else if (type.includes('top')) {
-              // Top View: Full circle focus, ignore corners
-              const dist = nx*nx + ny*ny;
-              if (dist < 0.6) isInsideROI = true;
-              // Usually no face visible in pure top view
-            } else {
-               // Back/Default
-               const headDist = (nx*nx)/(0.7*0.7) + (ny*ny)/(0.8*0.8);
-               if (headDist < 1) isInsideROI = true;
-            }
+/**
+ * Uygulamanın çağırdığı ana fonksiyon
+ * @param photo - İşlenecek fotoğraf nesnesi
+ */
+export const processHairImage = async (photo: any) => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // 1. Resmi Yükle
+      const img = new Image();
+      img.crossOrigin = "Anonymous"; // CORS sorunlarını önlemek için
+      img.src = photo.preview;
 
-            // ---------------------------------------------------------
-            // 2. Processing Logic
-            // ---------------------------------------------------------
-            if (isInsideROI && !isFaceExclusion) {
-              scalpRegionPixelCount++;
+      img.onload = async () => {
+        try {
+          // Oturumu Başlat (Varsa önbellekten, yoksa URL'den)
+          const sess = await initSession();
 
-              const isSkin = isSkinPixel(r, g, b);
-              const brightness = (r + g + b) / 3;
-              
-              // Hair Detection Heuristics:
-              // 1. Not skin AND
-              // 2. Either very dark (dark hair) OR sufficient contrast/texture (light hair)
-              // 3. Y coordinate bias (hair more likely at top of ROI)
-              
-              const isDark = brightness < 110;
-              // Some hair highlights can be lighter, so we allow higher brightness if it's definitely not skin
-              // and we are in the upper region of the head
-              const isLighterHair = brightness < 180 && !isSkin && y < height * 0.6; 
+          // 2. Resmi Hazırla (Preprocess)
+          const tensor = preprocess(img, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
 
-              const isHair = (isDark || isLighterHair) && !isSkin;
+          // 3. Modeli Çalıştır (Inference)
+          // Modelin giriş ve çıkış isimlerini otomatik bulmaya çalışıyoruz.
+          const feeds: Record<string, ort.Tensor> = {};
+          const inputNames = sess.inputNames;
+          
+          // Genellikle ilk giriş 'input' veya 'images' olur
+          feeds[inputNames[0]] = tensor;
 
-              if (isHair) {
-                hairPixelCount++;
+          const results = await sess.run(feeds);
 
-                // --- Segmentation Mask (Blue) ---
-                maskData.data[i] = 0;     // R
-                maskData.data[i+1] = 100; // G
-                maskData.data[i+2] = 255; // B
-                maskData.data[i+3] = 180; // A (Stronger visibility)
+          // 4. Çıktıyı Al
+          const outputName = sess.outputNames[0];
+          const outputTensor = results[outputName];
 
-                // --- Heatmap Generation ---
-                // Simulate density: 
-                // Darker pixels in hair region = Denser hair (Green)
-                // Lighter pixels or pixels near skin boundary = Thinner (Yellow/Red)
-                
-                // Local density proxy: normalized brightness inverted
-                const localDensity = Math.max(0, 1 - (brightness / 150)); 
-                // Positional weighting (Top of head usually denser in non-balding)
-                const positionWeight = 1 - (Math.abs(ny) * 0.5);
-                
-                const score = localDensity * 0.7 + positionWeight * 0.3;
+          // 5. Sonuçları İşle (Postprocess)
+          const processedData = postprocess(outputTensor, img.width, img.height);
+          
+          // Depolama için orijinal resmi optimize et
+          const optimizedBase = resizeImageForStorage(img);
 
-                if (score > 0.65) {
-                   // High Density (Green)
-                   heatData.data[i] = 0; heatData.data[i+1] = 255; heatData.data[i+2] = 0; heatData.data[i+3] = 160;
-                } else if (score > 0.4) {
-                   // Medium (Yellow)
-                   heatData.data[i] = 255; heatData.data[i+1] = 255; heatData.data[i+2] = 0; heatData.data[i+3] = 160;
-                } else {
-                   // Low (Red)
-                   heatData.data[i] = 255; heatData.data[i+1] = 0; heatData.data[i+2] = 0; heatData.data[i+3] = 160;
-                }
+          // Sonuç nesnesini döndür
+          resolve({
+            ...photo,
+            preview: optimizedBase,
+            processed: processedData
+          });
 
-              } else {
-                // Transparent
-                maskData.data[i+3] = 0;
-                heatData.data[i+3] = 0;
-              }
-            } else {
-              // Transparent
-              maskData.data[i+3] = 0;
-              heatData.data[i+3] = 0;
-            }
-          }
+        } catch (error) {
+          console.error("AI Inference error:", error);
+          reject(error);
         }
+      };
 
-        // Write data
-        maskCtx.putImageData(maskData, 0, 0);
-        heatCtx.putImageData(heatData, 0, 0);
+      img.onerror = (err) => {
+        console.error("Image failed to load for AI processing", err);
+        reject(new Error("Resim yüklenemedi. Dosya bozuk veya formatı desteklenmiyor olabilir."));
+      };
 
-        // Metrics Calculation
-        // Avoid division by zero
-        const validArea = scalpRegionPixelCount > 0 ? scalpRegionPixelCount : 1;
-        const densityScore = Math.min(100, Math.round((hairPixelCount / validArea) * 100));
-
-        resolve({
-          ...photo,
-          preview: optimizedBase,
-          processed: {
-            segmentationMask: maskCanvas.toDataURL('image/png'),
-            densityHeatmap: heatCanvas.toDataURL('image/png'),
-            densityScore: densityScore,
-            coverageLabel: densityScore > 80 ? 'Thick Coverage' : densityScore > 50 ? 'Moderate Thinning' : 'Significant Loss',
-          }
-        });
-
-      } catch (e) {
-        console.error("ViT Processing Error", e);
-        reject(e);
-      }
-    };
-
-    img.onerror = (err) => {
-      console.error("Image load error", err);
-      reject(err);
-    };
+    } catch (e) {
+      console.error("General processing error:", e);
+      reject(e);
+    }
   });
 };
