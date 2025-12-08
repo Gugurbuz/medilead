@@ -5,7 +5,6 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
-// YENİ: Saç segmentasyonu için gerekli paketler
 import { FilesetResolver, ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision';
 
 // --- GLOBAL TİPLER ---
@@ -55,7 +54,7 @@ const SCAN_STEPS = [
   },
 ];
 
-// --- SCRIPT YÜKLEYİCİ (FaceMesh için) ---
+// --- SCRIPT YÜKLEYİCİ ---
 const loadScript = (src: string) => {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -78,11 +77,8 @@ interface LiveScannerProps {
 
 const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  
-  // İki ayrı canvas kullanıyoruz: Biri AR çizimleri (yüz çizgileri), diğeri saç maskesi için.
-  const canvasRef = useRef<HTMLCanvasElement>(null); // FaceMesh AR
-  const hairCanvasRef = useRef<HTMLCanvasElement>(null); // Hair Segmentation Mask
-  
+  const canvasRef = useRef<HTMLCanvasElement>(null); // FaceMesh Çizimi
+  const hairCanvasRef = useRef<HTMLCanvasElement>(null); // Saç Maskesi
   const processRef = useRef<HTMLCanvasElement>(null);
   const { toast } = useToast();
 
@@ -90,8 +86,8 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const [capturedImages, setCapturedImages] = useState<any[]>([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   
-  // YENİ: Saç Segmenter State'i
-  const [segmenter, setSegmenter] = useState<ImageSegmenter | null>(null);
+  // Segmenter'ı state yerine REF olarak tutuyoruz ki Camera callback içinde erişebilelim
+  const segmenterRef = useRef<ImageSegmenter | null>(null);
   
   const [pose, setPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
   const [quality, setQuality] = useState({ lighting: 'good', stability: 'stable', faceDetected: false });
@@ -106,7 +102,6 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const lastSpeakTimeRef = useRef(0);
   const faceMeshRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
-  const requestRef = useRef<number>(); // Animasyon döngüsü için
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
@@ -123,7 +118,48 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     lastSpeakTimeRef.current = now;
   }, [voiceEnabled]);
 
-  // --- AR DRAWING (FACE MESH) ---
+  // --- SAÇ MASKESİ ÇİZİMİ ---
+  const drawSegmentation = (result: ImageSegmenterResult) => {
+    const canvas = hairCanvasRef.current;
+    if (!canvas || !videoRef.current) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = videoRef.current.videoWidth;
+    const height = videoRef.current.videoHeight;
+
+    // Canvas boyutunu videoya eşitle
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    // Önceki kareyi temizle
+    ctx.clearRect(0, 0, width, height);
+
+    const mask = result.categoryMask;
+    if (!mask) return;
+
+    const imageData = ctx.createImageData(width, height);
+    const pixels = imageData.data;
+    const maskData = mask.getAsUint8Array();
+
+    // Piksel manipülasyonu (Maviye Boyama)
+    for (let i = 0; i < maskData.length; i++) {
+        if (maskData[i] === 1) { // Kategori 1 = Saç
+            const pIndex = i * 4;
+            pixels[pIndex] = 0;       // R
+            pixels[pIndex + 1] = 100; // G (Hafif cyan tonu ekledim daha parlak olsun)
+            pixels[pIndex + 2] = 255; // B (Mavi)
+            pixels[pIndex + 3] = 160; // Alpha (Görünürlüğü artırmak için 100 -> 160 yaptım)
+        }
+    }
+
+    // Maskeyi kanvasa bas
+    ctx.putImageData(imageData, 0, 0);
+  };
+
+  // --- YÜZ ÇİZGİLERİ (AR) ---
   const drawHairlineAR = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
     if (!landmarks) return;
     
@@ -157,123 +193,16 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     ctx.bezierCurveTo(mx, my + totalOffsetY, cp2x, cp2y, rx, ry + totalOffsetY + (style.curvature * 20));
 
     ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(74, 222, 128, 0.8)';
+    ctx.strokeStyle = 'rgba(74, 222, 128, 0.9)';
     ctx.setLineDash([5, 5]);
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 4;
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 6;
     ctx.stroke();
     
     ctx.fillStyle = '#4ade80';
     ctx.beginPath(); ctx.arc(mx, my + totalOffsetY, 4, 0, 2*Math.PI); ctx.fill();
     ctx.restore();
   };
-
-  // --- YENİ: HAIR SEGMENTATION INIT ---
-  useEffect(() => {
-    const initSegmenter = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
-        const newSegmenter = await ImageSegmenter.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          outputCategoryMask: true,
-          outputConfidenceMasks: false
-        });
-        if (isMountedRef.current) {
-          setSegmenter(newSegmenter);
-        }
-      } catch (e) {
-        console.error("Segmentation init error", e);
-      }
-    };
-    initSegmenter();
-  }, []);
-
-  // --- YENİ: SEGMENTATION LOOP & DRAWING ---
-  const predictSegmentation = useCallback(() => {
-    if (segmenter && videoRef.current && hairCanvasRef.current && videoRef.current.readyState >= 2) {
-        // Video oynuyorsa segmentasyon yap
-        const startTimeMs = performance.now();
-        const result = segmenter.segmentForVideo(videoRef.current, startTimeMs);
-        drawSegmentation(result);
-    }
-    requestRef.current = requestAnimationFrame(predictSegmentation);
-  }, [segmenter]);
-
-  // Segmenter yüklendiğinde döngüyü başlat
-  useEffect(() => {
-    if (segmenter) {
-        predictSegmentation();
-    }
-    return () => {
-        if (requestRef.current) cancelAnimationFrame(requestRef.current);
-    };
-  }, [segmenter, predictSegmentation]);
-
-  const drawSegmentation = (result: ImageSegmenterResult) => {
-    const canvas = hairCanvasRef.current;
-    if (!canvas || !videoRef.current) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const width = videoRef.current.videoWidth;
-    const height = videoRef.current.videoHeight;
-
-    // Canvas boyutunu videoya eşitle
-    if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-    }
-
-    // Önce temizle
-    ctx.clearRect(0, 0, width, height);
-
-    const mask = result.categoryMask;
-    if (!mask) return;
-
-    // Maskeyi canvas'a çiz (Aynalama için translate/scale kullanarak)
-    ctx.save();
-    ctx.translate(width, 0);
-    ctx.scale(-1, 1);
-
-    // Maske verisini işle
-    // Not: PutImageData dönüşümleri desteklemez, o yüzden geçici canvas veya piksel manipülasyonu gerekir.
-    // Performans için doğrudan piksel manipülasyonu yapıp sonra putImageData yapacağız, 
-    // FAKAT putImageData aynalamayı yoksayar.
-    // Bu yüzden önce veriyi oluşturup, sonra aynalanmış bir şekilde çizmek daha iyidir ama JS'de yavaş olabilir.
-    // Hile: CSS ile canvas'ı zaten aynaladık (transform scale-x-[-1]).
-    // Bu yüzden burada JS tarafında aynalama YAPMAMIZA GEREK YOKTUR, eğer CSS ile yaptıysak.
-    // Aşağıdaki `drawHairlineAR` fonksiyonu da CSS aynalamasına güveniyor mu?
-    // Kontrol: `drawHairlineAR` içinde `ctx.scale(-1, 1)` var. Demek ki JS tarafında aynalıyor.
-    // Ancak `FaceMesh` CSS ile aynalanmış videoyu kullanıyor mu? Evet: `transform scale-x-[-1]` class'ı var.
-    
-    // ÇÖZÜM: CSS ile zaten her şey aynalı. JS tarafında ekstra işlem yapmayalım.
-    // Sadece maskeyi olduğu gibi çizelim.
-    
-    ctx.restore(); // Save/Restore temizliği
-
-    const imageData = ctx.createImageData(width, height);
-    const pixels = imageData.data;
-    const maskData = mask.getAsUint8Array();
-
-    for (let i = 0; i < maskData.length; i++) {
-        if (maskData[i] === 1) { // Saç
-            const pIndex = i * 4;
-            pixels[pIndex] = 0;     // R
-            pixels[pIndex + 1] = 0; // G
-            pixels[pIndex + 2] = 255; // B (Mavi)
-            pixels[pIndex + 3] = 100; // Alpha (Şeffaflık 0-255)
-        }
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-  };
-
 
   // --- POSE CALCULATION ---
   const calculatePose = (landmarks: any) => {
@@ -301,13 +230,13 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
-  // --- RESULTS (FACE MESH) ---
+  // --- FACE MESH SONUÇLARI ---
   const onResults = useCallback((results: any) => {
     if (!isMountedRef.current || status === 'capturing') return;
     if (!isModelLoaded) setIsModelLoaded(true);
     if (!currentStep) return;
 
-    // 1. Brightness
+    // 1. Işık Kontrolü
     const pCanvas = processRef.current;
     if (pCanvas && results.image) {
       const pCtx = pCanvas.getContext('2d');
@@ -324,7 +253,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       }
     }
 
-    // 2. AR Drawing (FaceMesh Landmarks)
+    // 2. Yüz Çizgilerini Çiz (AR Layer)
     const canvas = canvasRef.current;
     if (canvas && videoRef.current) {
         const ctx = canvas.getContext('2d');
@@ -344,7 +273,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
 
-    // 3. Manual Step (Back of head)
+    // 3. Manuel Adım (Arka kısım)
     if (currentStep.guideType === 'manual') {
       if (!hasFace && !isLowLight) {
           setStatus('locked');
@@ -358,7 +287,7 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       return;
     }
 
-    // 4. FaceMesh Tracking Logic
+    // 4. FaceMesh Takip Mantığı
     if (!hasFace) {
       setQuality(prev => ({ ...prev, faceDetected: false }));
       setStatus('searching');
@@ -399,10 +328,37 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
 
   useEffect(() => { onResultsRef.current = onResults; }, [onResults]);
 
-  // --- INIT FACE MESH ---
+  // --- INIT (HEM FACEMESH HEM SEGMENTER) ---
   useEffect(() => {
     isMountedRef.current = true;
-    const init = async () => {
+    
+    // Segmenter'ı Yükle
+    const initSegmenter = async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+        const newSegmenter = await ImageSegmenter.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          outputCategoryMask: true,
+          outputConfidenceMasks: false
+        });
+        if (isMountedRef.current) {
+          segmenterRef.current = newSegmenter;
+          console.log("Hair Segmenter Loaded");
+        }
+      } catch (e) {
+        console.error("Segmentation init error", e);
+      }
+    };
+    initSegmenter();
+
+    // FaceMesh ve Camera'yı Yükle
+    const initFaceMesh = async () => {
       try {
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
@@ -436,8 +392,17 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         if (videoRef.current) {
           const camera = new CameraClass(videoRef.current, {
             onFrame: async () => {
+              // 1. FaceMesh İşlemi
               if (faceMeshRef.current && videoRef.current) {
                  await faceMeshRef.current.send({ image: videoRef.current });
+              }
+              
+              // 2. Hair Segmentation İşlemi (Aynı döngü içinde!)
+              if (segmenterRef.current && videoRef.current && hairCanvasRef.current) {
+                 const startTimeMs = performance.now();
+                 // Segmenter'a video elementini gönder
+                 const result = segmenterRef.current.segmentForVideo(videoRef.current, startTimeMs);
+                 drawSegmentation(result);
               }
             },
             width: 1280,
@@ -453,14 +418,14 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       }
     };
 
-    init();
+    initFaceMesh();
     setTimeout(() => speak(currentStep.instruction), 1000);
 
     return () => {
       isMountedRef.current = false;
       if (cameraRef.current) cameraRef.current.stop();
       if (faceMeshRef.current) faceMeshRef.current.close();
-      if (segmenter) segmenter.close();
+      if (segmenterRef.current) segmenterRef.current.close();
       window.speechSynthesis.cancel();
     };
   }, []); 
@@ -555,10 +520,10 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
         {/* 1. Video Layer */}
         <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
         
-        {/* 2. Hair Segmentation Mask Layer (YENİ) - Videonun üzerine, AR'ın altına */}
+        {/* 2. Hair Segmentation Mask Layer - Videonun üzerine */}
         <canvas ref={hairCanvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]" />
 
-        {/* 3. AR Drawing Layer (Face Landmarks) - En üstte */}
+        {/* 3. AR Drawing Layer (Yüz Çizgileri) - En üstte */}
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"/>
 
         {isLowLight && (
