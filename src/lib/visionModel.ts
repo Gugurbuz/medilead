@@ -1,163 +1,113 @@
-import * as ort from 'onnxruntime-web';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// --- CRITICAL FIX: WASM DOSYA YOLUNU AYARLA ---
-// Bu satır, tarayıcının .wasm dosyalarını doğru yerden çekmesini sağlar.
-ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.16.3/dist/";
+// Eğer environment variable yoksa boş string döner (Hata yönetimi için)
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || "";
 
-const MODEL_PATH = 'https://uzootohvsanqlhijmkpn.supabase.co/storage/v1/object/public/models/face_parsing_bisenet.onnx';
-const MODEL_INPUT_SIZE = 512;
-const HAIR_CLASS_INDEX = 17;
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
+const genAI = new GoogleGenerativeAI(API_KEY);
 
-let sessionPromise: Promise<ort.InferenceSession> | null = null;
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-flash",
+});
 
-const getSession = async (): Promise<ort.InferenceSession> => {
-  if (!sessionPromise) {
-    sessionPromise = ort.InferenceSession.create(MODEL_PATH, {
-      executionProviders: ['webgl', 'wasm'],
-      graphOptimizationLevel: 'all',
-    }).catch((err) => {
-      sessionPromise = null;
-      throw err;
-    });
-  }
-  return sessionPromise;
+/**
+ * File objesini Base64 string'e çeviren yardımcı fonksiyon.
+ */
+const fileToGenerativePart = async (file: File | Blob): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      // "data:image/jpeg;base64," kısmını temizle
+      const base64Data = base64String.split(",")[1];
+      resolve({
+        inlineData: {
+          data: base64Data,
+          mimeType: file.type,
+        },
+      });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
-const resizeImage = (img: HTMLImageElement, width: number, height: number): HTMLCanvasElement => {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) throw new Error('Canvas context error');
-  ctx.drawImage(img, 0, 0, width, height);
-  return canvas;
-};
-
-const resizeImageForStorage = (source: HTMLImageElement, maxWidth = 800): string => {
-  const canvas = document.createElement('canvas');
-  let width = source.width;
-  let height = source.height;
-  if (width > maxWidth) {
-    height = Math.round((height * maxWidth) / width);
-    width = maxWidth;
-  }
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (ctx) ctx.drawImage(source, 0, 0, width, height);
-  return canvas.toDataURL('image/jpeg', 0.85);
-};
-
-const preprocess = (ctx: CanvasRenderingContext2D, width: number, height: number): ort.Tensor => {
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const { data } = imageData;
-  const inputTensor = new Float32Array(3 * width * height);
-  const size = width * height;
-
-  for (let i = 0; i < size; i++) {
-    const r = data[i * 4] / 255.0;
-    const g = data[i * 4 + 1] / 255.0;
-    const b = data[i * 4 + 2] / 255.0;
-    inputTensor[i] = (r - MEAN[0]) / STD[0];
-    inputTensor[i + size] = (g - MEAN[1]) / STD[1];
-    inputTensor[i + 2 * size] = (b - MEAN[2]) / STD[2];
-  }
-  return new ort.Tensor('float32', inputTensor, [1, 3, height, width]);
-};
-
-const postprocess = (outputTensor: ort.Tensor, originalWidth: number, originalHeight: number) => {
-  const data = outputTensor.data as Float32Array;
-  const numClasses = 19; 
-  const height = MODEL_INPUT_SIZE;
-  const width = MODEL_INPUT_SIZE;
-  const size = height * width;
-
-  const maskCanvas = document.createElement('canvas');
-  maskCanvas.width = width;
-  maskCanvas.height = height;
-  const maskCtx = maskCanvas.getContext('2d');
-  if (!maskCtx) throw new Error('Mask context failed');
-
-  const maskImgData = maskCtx.createImageData(width, height);
-  const pixelData = maskImgData.data;
-  let hairPixelCount = 0;
-
-  for (let i = 0; i < size; i++) {
-    let maxVal = -Infinity;
-    let maxClass = 0;
-    for (let c = 0; c < numClasses; c++) {
-      const val = data[c * size + i];
-      if (val > maxVal) { maxVal = val; maxClass = c; }
-    }
-    const pixelIndex = i * 4;
-    if (maxClass === HAIR_CLASS_INDEX) {
-      hairPixelCount++;
-      pixelData[pixelIndex] = 0;
-      pixelData[pixelIndex + 1] = 255;
-      pixelData[pixelIndex + 2] = 0;
-      pixelData[pixelIndex + 3] = 140;
-    } else {
-      pixelData[pixelIndex + 3] = 0;
-    }
-  }
-
-  maskCtx.putImageData(maskImgData, 0, 0);
-  const finalMaskCanvas = document.createElement('canvas');
-  finalMaskCanvas.width = originalWidth;
-  finalMaskCanvas.height = originalHeight;
-  const finalCtx = finalMaskCanvas.getContext('2d');
-  if (!finalCtx) throw new Error('Final context failed');
-  finalCtx.drawImage(maskCanvas, 0, 0, originalWidth, originalHeight);
-
-  const densityRaw = (hairPixelCount / (size * 0.25)) * 100;
-  const densityScore = Math.min(100, Math.round(densityRaw));
-  let coverageLabel = 'Seyrek';
-  if (densityScore > 75) coverageLabel = 'Yoğun';
-  else if (densityScore > 40) coverageLabel = 'Orta';
-
+/**
+ * Base64 string'den veri temizleme ve formatlama yardımcısı
+ */
+const base64ToGenerativePart = (base64String: string, mimeType: string) => {
   return {
-    segmentationMask: finalMaskCanvas.toDataURL('image/png'),
-    densityScore: densityScore,
-    coverageLabel: coverageLabel
+    inlineData: {
+      data: base64String.includes("base64,") ? base64String.split(",")[1] : base64String,
+      mimeType
+    },
   };
 };
 
-export const processHairImage = async (imageSource: string) => {
+export interface HairAnalysisResult {
+  condition: string;
+  treatment: string;
+  products: string[];
+  routine: string;
+  notes: string;
+}
+
+export const processHairImage = async (
+  imageSource: File | string,
+  additionalNotes?: string
+): Promise<HairAnalysisResult> => {
   try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      // FIX: Data URL'ler için crossOrigin ayarını atla
-      if (!imageSource.startsWith('data:')) {
-        i.crossOrigin = "Anonymous";
+    if (!API_KEY) {
+      throw new Error("Google API Key bulunamadı. Lütfen .env dosyanızı kontrol edin.");
+    }
+
+    let imagePart;
+
+    // TİP KONTROLÜ VE DÖNÜŞÜM (Hata Düzeltmesi Buradadır)
+    if (imageSource instanceof File || imageSource instanceof Blob) {
+      // Eğer girdi bir Dosya ise, Base64'e çevir
+      imagePart = await fileToGenerativePart(imageSource);
+    } else if (typeof imageSource === 'string') {
+      // Eğer girdi zaten String ise
+      if (imageSource.startsWith('data:')) {
+        // Data URL ise parse et (mimeType'ı string içinden al)
+        const mimeType = imageSource.substring(5, imageSource.indexOf(';'));
+        imagePart = base64ToGenerativePart(imageSource, mimeType);
+      } else {
+        // Düz URL veya başka bir string ise hata fırlat veya varsayılan işlem yap
+         throw new Error("Geçersiz resim formatı. Lütfen geçerli bir dosya veya Base64 string sağlayın.");
       }
-      i.src = imageSource;
-      i.onload = () => resolve(i);
-      i.onerror = (e) => {
-        console.error("Image load failed details:", e);
-        reject(new Error("Failed to load image for processing."));
-      };
-    });
+    } else {
+      throw new Error("Görüntü kaynağı tanınamadı (File veya Base64 String olmalı).");
+    }
 
-    const session = await getSession();
-    const resizedCanvas = resizeImage(img, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
-    const ctx = resizedCanvas.getContext('2d')!;
-    const inputTensor = preprocess(ctx, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+    const prompt = `
+      Sen uzman bir dermatolog ve saç sağlığı uzmanısın.
+      Bu saç fotoğrafını analiz et ve aşağıdaki formatta JSON verisi döndür.
+      Sadece JSON döndür, markdown veya ek metin ekleme.
+      
+      Kullanıcı notları: ${additionalNotes || "Yok"}
 
-    const feeds: Record<string, ort.Tensor> = {};
-    feeds[session.inputNames[0]] = inputTensor;
-    const results = await session.run(feeds);
-    const outputTensor = results[session.outputNames[0]];
+      İstenen JSON Yapısı:
+      {
+        "condition": "Saçın durumu ve teşhis (örn: Yağlı egzama, kepek, saç dökülmesi)",
+        "treatment": "Önerilen tedavi yöntemleri",
+        "products": ["Önerilen ürün tipleri (Marka verme, içerik ver. Örn: Ketokonazol şampuan)"],
+        "routine": "Günlük/Haftalık bakım rutini önerisi",
+        "notes": "Ekstra tavsiyeler ve dikkat edilmesi gerekenler"
+      }
+    `;
+
+    const result = await model.generateContent([prompt, imagePart]);
+    const response = await result.response;
+    const text = response.text();
+
+    // JSON temizleme (Markdown bloklarını kaldırır)
+    const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
     
-    const processedData = postprocess(outputTensor, img.width, img.height);
+    return JSON.parse(cleanedText) as HairAnalysisResult;
 
-    return {
-      original: resizeImageForStorage(img),
-      ...processedData
-    };
   } catch (error) {
     console.error("Hair Analysis Error:", error);
-    throw error;
+    throw new Error("Saç analizi yapılırken bir hata oluştu: " + (error instanceof Error ? error.message : "Bilinmeyen hata"));
   }
 };
