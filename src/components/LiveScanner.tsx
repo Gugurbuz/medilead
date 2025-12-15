@@ -90,6 +90,7 @@ interface LiveScannerProps {
 const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const { toast } = useToast();
 
   // Durum Yönetimi
@@ -222,20 +223,122 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
     const nose = landmarks[1];
     const leftCheek = landmarks[234];
     const rightCheek = landmarks[454];
-    const midEyes = { 
-      x: (landmarks[33].x + landmarks[263].x) / 2, 
-      y: (landmarks[33].y + landmarks[263].y) / 2 
+    const midEyes = {
+      x: (landmarks[33].x + landmarks[263].x) / 2,
+      y: (landmarks[33].y + landmarks[263].y) / 2
     };
 
     const faceWidth = Math.abs(rightCheek.x - leftCheek.x);
-    const noseRelativeX = nose.x - midEyes.x; 
+    const noseRelativeX = nose.x - midEyes.x;
     const yaw = -(noseRelativeX / faceWidth) * 200; // Hassasiyet ayarı
 
     const faceHeight = Math.abs(landmarks[14].y - midEyes.y);
     const noseRelativeY = nose.y - midEyes.y;
-    const pitch = ((noseRelativeY / faceHeight) - 0.4) * 150; 
+    const pitch = ((noseRelativeY / faceHeight) - 0.4) * 150;
 
     return { yaw, pitch, roll: 0 };
+  };
+
+  // Saç Bölgesi Çizimi
+  const drawHairRegions = (landmarks: any) => {
+    if (!overlayCanvasRef.current || !videoRef.current) return;
+
+    const canvas = overlayCanvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Canvas boyutunu video ile eşitle
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    // Temizle
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Landmark koordinatlarını video boyutuna çevir
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Saç çizgisi noktaları (alın etrafı)
+    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
+
+    // Saç bölgesi (üst kısım)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(74, 222, 128, 0.6)';
+    ctx.fillStyle = 'rgba(74, 222, 128, 0.15)';
+    ctx.lineWidth = 2;
+
+    // Alın çizgisini çiz
+    hairlineIndices.forEach((idx, i) => {
+      const point = landmarks[idx];
+      const x = point.x * w;
+      const y = point.y * h;
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+
+    // Saç bölgesini yukarı doğru genişlet
+    const topY = 0;
+    const rightmostPoint = landmarks[454];
+    const leftmostPoint = landmarks[234];
+
+    ctx.lineTo(rightmostPoint.x * w, topY);
+    ctx.lineTo(leftmostPoint.x * w, topY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Temporal bölgeler (yan saç bölgeleri)
+    const drawTemporalRegion = (points: number[], side: 'left' | 'right') => {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(96, 165, 250, 0.6)';
+      ctx.fillStyle = 'rgba(96, 165, 250, 0.15)';
+
+      points.forEach((idx, i) => {
+        const point = landmarks[idx];
+        const x = point.x * w;
+        const y = point.y * h;
+
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+
+      ctx.stroke();
+    };
+
+    // Sol temporal bölge
+    drawTemporalRegion([234, 93, 132, 227, 234], 'left');
+    // Sağ temporal bölge
+    drawTemporalRegion([454, 323, 361, 447, 454], 'right');
+
+    // Tepe noktası işaretleyici
+    const topPoint = landmarks[10];
+    ctx.beginPath();
+    ctx.arc(topPoint.x * w, topPoint.y * h, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.8)';
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Etiketler
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = 'white';
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 3;
+
+    // Alın etiketi
+    const foreheadY = landmarks[10].y * h - 20;
+    const foreheadX = landmarks[10].x * w;
+    ctx.strokeText('Saç Çizgisi', foreheadX - 40, foreheadY);
+    ctx.fillText('Saç Çizgisi', foreheadX - 40, foreheadY);
   };
 
   const onResults = useCallback((results: any) => {
@@ -269,14 +372,26 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       setQuality(prev => ({ ...prev, faceDetected: false }));
       setStatus('searching');
       setScanProgress(0);
+
+      // Overlay'i temizle
+      if (overlayCanvasRef.current) {
+        const ctx = overlayCanvasRef.current.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+        }
+      }
+
       return;
     }
 
     setQuality(prev => ({ ...prev, faceDetected: true }));
     const landmarks = results.multiFaceLandmarks[0];
     const headPose = calculatePose(landmarks);
-    
+
     if (headPose) setPose(headPose);
+
+    // Saç bölgelerini çiz
+    drawHairRegions(landmarks);
 
     const { target } = currentStep;
     if (!target) return;
@@ -374,12 +489,20 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
       
       {/* 1. Kamera Katmanı (En Altta) */}
       <div className="absolute inset-0 z-0">
-        <video 
+        <video
           ref={videoRef}
           className="w-full h-full object-cover transform scale-x-[-1]"
           playsInline
           muted
           style={{ filter: `brightness(${brightness}%) contrast(${contrast}%)` }}
+        />
+      </div>
+
+      {/* 1.5 Saç Bölgesi Overlay Katmanı */}
+      <div className="absolute inset-0 z-5 pointer-events-none">
+        <canvas
+          ref={overlayCanvasRef}
+          className="w-full h-full object-cover transform scale-x-[-1]"
         />
       </div>
 
