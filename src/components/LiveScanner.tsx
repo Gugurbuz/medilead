@@ -32,7 +32,7 @@ const SCAN_STEPS = [
   {
     id: 'top',
     label: 'Tepe Görünümü',
-    instruction: 'Telefonu başınızın üstüne tutun ve tepeyi çekin',
+    instruction: 'Kafanızı eğmeyin! Telefonu başınızın tam üstüne kaldırıp tepeyi çekin',
     target: null,
     guideType: 'manual'
   },
