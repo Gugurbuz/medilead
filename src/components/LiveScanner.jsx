@@ -167,67 +167,87 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
-  // Segment Hair using MediaPipe Image Segmenter
-  const segmentHair = useCallback((video, startTimeMs) => {
-    if (!hairSegmenterRef.current || !video) return null;
+  // Segment Hair using MediaPipe Selfie Segmentation
+  const segmentHair = useCallback(async (video) => {
+    if (!hairSegmenterRef.current || !hairSegmenterRef.current.selfieSegmentation || !video) {
+      return null;
+    }
 
     try {
-      const result = hairSegmenterRef.current.segmentForVideo(video, startTimeMs);
-      return result;
+      return new Promise((resolve) => {
+        hairSegmenterRef.current.onSegmentationResults = (results) => {
+          hairSegmenterRef.current.lastResults = results;
+          resolve(results);
+        };
+
+        hairSegmenterRef.current.selfieSegmentation.send({ image: video });
+      });
     } catch (error) {
       console.error('Hair segmentation error:', error);
-      return null;
+      return hairSegmenterRef.current.lastResults;
     }
   }, []);
 
   // Draw Hair Mask with Beard Eraser Logic
   const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
-    if (!hairResult || !hairResult.categoryMask) return;
+    if (!hairResult || !hairResult.segmentationMask) return;
 
-    const mask = hairResult.categoryMask;
+    const mask = hairResult.segmentationMask;
     const width = mask.width;
     const height = mask.height;
 
-    const maskData = mask.getAsUint8Array();
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(mask, 0, 0);
+
+    const maskData = tempCtx.getImageData(0, 0, width, height);
+    const maskPixels = maskData.data;
 
     const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
     const data = imageData.data;
 
-    for (let i = 0; i < maskData.length; i++) {
-      const isHair = maskData[i] === 1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        const maskValue = maskPixels[idx];
 
-      if (isHair) {
-        const y = Math.floor(i / width);
-        const x = i % width;
+        const isBody = maskValue > 128;
 
-        const canvasX = Math.floor((x / width) * ctx.canvas.width);
-        const canvasY = Math.floor((y / height) * ctx.canvas.height);
+        if (isBody) {
+          const canvasX = Math.floor((x / width) * ctx.canvas.width);
+          const canvasY = Math.floor((y / height) * ctx.canvas.height);
 
-        let shouldDraw = true;
+          let shouldDraw = true;
 
-        // BEARD ERASER: Remove beard/lower face hair using landmarks
-        if (landmarks) {
-          const chinY = landmarks[152].y * ctx.canvas.height;
-          const mouthBottomY = landmarks[14].y * ctx.canvas.height;
+          // BEARD ERASER: Remove lower face and body parts
+          if (landmarks) {
+            const chinY = landmarks[152].y * ctx.canvas.height;
+            const noseY = landmarks[1].y * ctx.canvas.height;
+            const foreheadY = landmarks[10].y * ctx.canvas.height;
 
-          if (canvasY > chinY - 20) {
-            shouldDraw = false;
-          } else if (canvasY > mouthBottomY - 10) {
-            const leftCheek = landmarks[234].x * ctx.canvas.width;
-            const rightCheek = landmarks[454].x * ctx.canvas.width;
-            if (canvasX > leftCheek && canvasX < rightCheek) {
+            if (canvasY > chinY - 30) {
               shouldDraw = false;
+            } else if (canvasY < foreheadY) {
+              shouldDraw = true;
+            } else if (canvasY > noseY) {
+              const leftCheek = landmarks[234].x * ctx.canvas.width;
+              const rightCheek = landmarks[454].x * ctx.canvas.width;
+              if (canvasX > leftCheek && canvasX < rightCheek) {
+                shouldDraw = false;
+              }
             }
           }
-        }
 
-        if (shouldDraw) {
-          const idx = (canvasY * ctx.canvas.width + canvasX) * 4;
-          if (idx >= 0 && idx < data.length - 3) {
-            data[idx] = 34;
-            data[idx + 1] = 197;
-            data[idx + 2] = 94;
-            data[idx + 3] = 180;
+          if (shouldDraw) {
+            const canvasIdx = (canvasY * ctx.canvas.width + canvasX) * 4;
+            if (canvasIdx >= 0 && canvasIdx < data.length - 3) {
+              data[canvasIdx] = 34;
+              data[canvasIdx + 1] = 197;
+              data[canvasIdx + 2] = 94;
+              data[canvasIdx + 3] = 180;
+            }
           }
         }
       }
@@ -302,7 +322,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   }, []);
 
   // Process Frames
-  const onResults = useCallback((results) => {
+  const onResults = useCallback(async (results) => {
     if (!isMountedRef.current || status === 'capturing') return;
     if (!currentStep) return;
 
@@ -316,36 +336,23 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     // Segment hair and draw
     let hairResult = null;
     if (videoRef.current && isSegmenterLoaded && activeOverlay === 'hairline') {
-      const startTimeMs = performance.now();
-      hairResult = segmentHair(videoRef.current, startTimeMs);
+      hairResult = await segmentHair(videoRef.current);
     }
 
-    try {
-      const canvas = overlayCanvasRef.current;
-      if (canvas && videoRef.current) {
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const canvas = overlayCanvasRef.current;
+    if (canvas && videoRef.current) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          // LAYER 1: Hair Segmentation Mask (Bottom)
-          if (hairResult && activeOverlay === 'hairline') {
-            drawHairMask(ctx, hairResult, currentLandmarks || undefined);
-          }
+        // LAYER 1: Hair Segmentation Mask (Bottom)
+        if (hairResult && activeOverlay === 'hairline') {
+          drawHairMask(ctx, hairResult, currentLandmarks || undefined);
+        }
 
-          // LAYER 2: Face Mesh Overlay (Top) - Landmarks
-          if (currentLandmarks && activeOverlay === 'hairline') {
-            drawHairRegions(currentLandmarks, canvas);
-          }
-        }
-      }
-    } finally {
-      // CRITICAL: Close MediaPipe masks to prevent memory leaks
-      if (hairResult) {
-        if (hairResult.categoryMask) {
-          hairResult.categoryMask.close();
-        }
-        if (hairResult.confidenceMasks) {
-          hairResult.confidenceMasks.forEach(mask => mask.close());
+        // LAYER 2: Face Mesh Overlay (Top) - Landmarks
+        if (currentLandmarks && activeOverlay === 'hairline') {
+          drawHairRegions(currentLandmarks, canvas);
         }
       }
     }
@@ -450,37 +457,46 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     }
   }, []);
 
-  // Initialize MediaPipe Image Segmenter for Hair
+  // Initialize MediaPipe Selfie Segmentation for Hair
   useEffect(() => {
     const initHairSegmenter = async () => {
       try {
-        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/vision_bundle.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js');
 
-        if (!window.ImageSegmenter || !window.FilesetResolver) {
-          console.error('ImageSegmenter not loaded from CDN');
+        if (!window.SelfieSegmentation) {
+          console.error('SelfieSegmentation not loaded from CDN');
           return;
         }
 
-        const vision = await window.FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm'
-        );
-
-        const imageSegmenter = await window.ImageSegmenter.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float16/latest/hair_segmenter.tflite',
-            delegate: 'GPU'
-          },
-          runningMode: 'VIDEO',
-          outputCategoryMask: true,
-          outputConfidenceMasks: false
+        const selfieSegmentation = new window.SelfieSegmentation({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${file}`;
+          }
         });
 
-        hairSegmenterRef.current = imageSegmenter;
+        selfieSegmentation.setOptions({
+          modelSelection: 1,
+        });
+
+        selfieSegmentation.onResults((results) => {
+          if (hairSegmenterRef.current && hairSegmenterRef.current.onSegmentationResults) {
+            hairSegmenterRef.current.onSegmentationResults(results);
+          }
+        });
+
+        await selfieSegmentation.initialize();
+
+        hairSegmenterRef.current = {
+          selfieSegmentation,
+          onSegmentationResults: null,
+          lastResults: null
+        };
+
         setIsSegmenterLoaded(true);
-        console.log('Hair Segmenter loaded successfully');
+        console.log('Selfie Segmentation loaded successfully');
 
       } catch (error) {
-        console.error('Error loading Hair Segmenter:', error);
+        console.error('Error loading Selfie Segmentation:', error);
         setIsSegmenterLoaded(false);
       }
     };
@@ -488,9 +504,9 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     initHairSegmenter();
 
     return () => {
-      if (hairSegmenterRef.current) {
+      if (hairSegmenterRef.current && hairSegmenterRef.current.selfieSegmentation) {
         try {
-          hairSegmenterRef.current.close();
+          hairSegmenterRef.current.selfieSegmentation.close();
         } catch(e) {}
       }
     };
