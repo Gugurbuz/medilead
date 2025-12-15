@@ -188,9 +188,9 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     }
   }, []);
 
-  // Draw Hair Mask with Beard Eraser Logic
+  // Draw Hair Mask ONLY above forehead line
   const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
-    if (!hairResult || !hairResult.segmentationMask) return;
+    if (!hairResult || !hairResult.segmentationMask || !landmarks) return;
 
     const mask = hairResult.segmentationMask;
     const width = mask.width;
@@ -208,6 +208,15 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
     const data = imageData.data;
 
+    // Critical Y-coordinates from landmarks
+    const foreheadY = landmarks[10].y * ctx.canvas.height;
+    const leftTempleY = landmarks[234].y * ctx.canvas.height;
+    const rightTempleY = landmarks[454].y * ctx.canvas.height;
+    const maxFaceY = Math.max(leftTempleY, rightTempleY, foreheadY);
+
+    // Only draw ABOVE the forehead/temple line
+    const hairlineThreshold = maxFaceY - 10;
+
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
@@ -219,34 +228,14 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           const canvasX = Math.floor((x / width) * ctx.canvas.width);
           const canvasY = Math.floor((y / height) * ctx.canvas.height);
 
-          let shouldDraw = true;
-
-          // BEARD ERASER: Remove lower face and body parts
-          if (landmarks) {
-            const chinY = landmarks[152].y * ctx.canvas.height;
-            const noseY = landmarks[1].y * ctx.canvas.height;
-            const foreheadY = landmarks[10].y * ctx.canvas.height;
-
-            if (canvasY > chinY - 30) {
-              shouldDraw = false;
-            } else if (canvasY < foreheadY) {
-              shouldDraw = true;
-            } else if (canvasY > noseY) {
-              const leftCheek = landmarks[234].x * ctx.canvas.width;
-              const rightCheek = landmarks[454].x * ctx.canvas.width;
-              if (canvasX > leftCheek && canvasX < rightCheek) {
-                shouldDraw = false;
-              }
-            }
-          }
-
-          if (shouldDraw) {
+          // ONLY draw pixels ABOVE the hairline
+          if (canvasY < hairlineThreshold) {
             const canvasIdx = (canvasY * ctx.canvas.width + canvasX) * 4;
             if (canvasIdx >= 0 && canvasIdx < data.length - 3) {
               data[canvasIdx] = 34;
               data[canvasIdx + 1] = 197;
               data[canvasIdx + 2] = 94;
-              data[canvasIdx + 3] = 180;
+              data[canvasIdx + 3] = 120;
             }
           }
         }
