@@ -188,7 +188,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     }
   }, []);
 
-  // Draw Hair Mask ONLY above forehead line
+  // Draw Hair Mask with hairline polygon masking
   const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
     if (!hairResult || !hairResult.segmentationMask || !landmarks) return;
 
@@ -208,14 +208,34 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
     const data = imageData.data;
 
-    // Critical Y-coordinates from landmarks
-    const foreheadY = landmarks[10].y * ctx.canvas.height;
-    const leftTempleY = landmarks[234].y * ctx.canvas.height;
-    const rightTempleY = landmarks[454].y * ctx.canvas.height;
-    const maxFaceY = Math.max(leftTempleY, rightTempleY, foreheadY);
+    // Hairline landmarks polygon for realistic hair boundary
+    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
 
-    // Only draw ABOVE the forehead/temple line
-    const hairlineThreshold = maxFaceY - 10;
+    // Create hairline polygon points
+    const hairlinePolygon = hairlineIndices.map(idx => ({
+      x: landmarks[idx].x * ctx.canvas.width,
+      y: landmarks[idx].y * ctx.canvas.height
+    }));
+
+    // Helper: point in polygon check
+    const isAboveHairline = (x, y) => {
+      // Find the hairline Y at this X position
+      let minY = Infinity;
+      for (let i = 0; i < hairlinePolygon.length; i++) {
+        const p1 = hairlinePolygon[i];
+        const p2 = hairlinePolygon[(i + 1) % hairlinePolygon.length];
+
+        // Check if x is between these two points
+        if ((p1.x <= x && x <= p2.x) || (p2.x <= x && x <= p1.x)) {
+          // Interpolate Y
+          const t = (x - p1.x) / (p2.x - p1.x);
+          const interpolatedY = p1.y + t * (p2.y - p1.y);
+          minY = Math.min(minY, interpolatedY);
+        }
+      }
+
+      return y < minY - 5; // 5px margin
+    };
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -228,14 +248,14 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           const canvasX = Math.floor((x / width) * ctx.canvas.width);
           const canvasY = Math.floor((y / height) * ctx.canvas.height);
 
-          // ONLY draw pixels ABOVE the hairline
-          if (canvasY < hairlineThreshold) {
+          // Check if pixel is above hairline
+          if (isAboveHairline(canvasX, canvasY)) {
             const canvasIdx = (canvasY * ctx.canvas.width + canvasX) * 4;
             if (canvasIdx >= 0 && canvasIdx < data.length - 3) {
               data[canvasIdx] = 34;
               data[canvasIdx + 1] = 197;
               data[canvasIdx + 2] = 94;
-              data[canvasIdx + 3] = 120;
+              data[canvasIdx + 3] = 100;
             }
           }
         }
