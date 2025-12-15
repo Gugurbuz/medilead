@@ -188,7 +188,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     }
   }, []);
 
-  // Draw Hair Mask with hairline polygon masking
+  // Draw Hair Mask with face exclusion
   const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
     if (!hairResult || !hairResult.segmentationMask || !landmarks) return;
 
@@ -208,48 +208,60 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
     const data = imageData.data;
 
-    // Hairline landmarks polygon for realistic hair boundary
-    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
+    // Face oval + forehead contour for precise face boundary
+    const faceContourIndices = [
+      10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+      397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+      172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
+    ];
 
-    // Create hairline polygon points
-    const hairlinePolygon = hairlineIndices.map(idx => ({
+    // Extended face mask including cheeks, ears, chin, neck
+    const fullFaceIndices = [
+      ...faceContourIndices,
+      // Chin and jaw
+      175, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454,
+      // Cheeks and temples
+      234, 93, 132, 58, 172, 136, 150, 149, 176, 148,
+      // Lower face
+      18, 200, 199, 175, 152
+    ];
+
+    const facePolygon = fullFaceIndices.map(idx => ({
       x: landmarks[idx].x * ctx.canvas.width,
       y: landmarks[idx].y * ctx.canvas.height
     }));
 
-    // Helper: point in polygon check
-    const isAboveHairline = (x, y) => {
-      // Find the hairline Y at this X position
-      let minY = Infinity;
-      for (let i = 0; i < hairlinePolygon.length; i++) {
-        const p1 = hairlinePolygon[i];
-        const p2 = hairlinePolygon[(i + 1) % hairlinePolygon.length];
+    // Ray casting algorithm for point-in-polygon test
+    const isInsideFace = (px, py) => {
+      let inside = false;
+      for (let i = 0, j = facePolygon.length - 1; i < facePolygon.length; j = i++) {
+        const xi = facePolygon[i].x, yi = facePolygon[i].y;
+        const xj = facePolygon[j].x, yj = facePolygon[j].y;
 
-        // Check if x is between these two points
-        if ((p1.x <= x && x <= p2.x) || (p2.x <= x && x <= p1.x)) {
-          // Interpolate Y
-          const t = (x - p1.x) / (p2.x - p1.x);
-          const interpolatedY = p1.y + t * (p2.y - p1.y);
-          minY = Math.min(minY, interpolatedY);
-        }
+        const intersect = ((yi > py) !== (yj > py)) &&
+                         (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
       }
-
-      return y < minY - 5; // 5px margin
+      return inside;
     };
+
+    // Get forehead top Y for upper boundary
+    const foreheadY = landmarks[10].y * ctx.canvas.height;
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
         const maskValue = maskPixels[idx];
-
         const isBody = maskValue > 128;
 
         if (isBody) {
           const canvasX = Math.floor((x / width) * ctx.canvas.width);
           const canvasY = Math.floor((y / height) * ctx.canvas.height);
 
-          // Check if pixel is above hairline
-          if (isAboveHairline(canvasX, canvasY)) {
+          // Draw only if: above forehead AND outside face polygon
+          const isHairRegion = canvasY < foreheadY && !isInsideFace(canvasX, canvasY);
+
+          if (isHairRegion) {
             const canvasIdx = (canvasY * ctx.canvas.width + canvasX) * 4;
             if (canvasIdx >= 0 && canvasIdx < data.length - 3) {
               data[canvasIdx] = 34;
