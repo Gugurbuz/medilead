@@ -91,6 +91,7 @@ const RangeControl = ({ icon: Icon, label, value, onChange, min = 0, max = 200 }
 const LiveScanner = ({ onComplete, onCancel }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
   const { toast } = useToast();
 
   // Logic State
@@ -163,12 +164,90 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
+  // Draw hair regions on canvas
+  const drawHairRegions = useCallback((landmarks, canvasElement) => {
+    if (!canvasElement || !landmarks) return;
+
+    const ctx = canvasElement.getContext('2d');
+    const width = canvasElement.width;
+    const height = canvasElement.height;
+
+    ctx.clearRect(0, 0, width, height);
+
+    // Hairline landmark indices (forehead area)
+    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
+
+    // Draw hairline
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = 'rgba(34, 197, 94, 0.5)';
+    ctx.shadowBlur = 10;
+
+    hairlineIndices.forEach((index, i) => {
+      const point = landmarks[index];
+      const x = point.x * width;
+      const y = point.y * height;
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+
+    // Draw key hairline points
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.9)';
+    hairlineIndices.forEach(index => {
+      const point = landmarks[index];
+      const x = point.x * width;
+      const y = point.y * height;
+      ctx.beginPath();
+      ctx.arc(x, y, 2, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+
+    // Draw temporal regions (sides)
+    const leftTempleIndices = [234, 93, 132, 58, 172, 136, 150, 149];
+    const rightTempleIndices = [454, 323, 361, 288, 397, 365, 379, 378];
+
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
+    ctx.lineWidth = 2;
+
+    [leftTempleIndices, rightTempleIndices].forEach(templeIndices => {
+      ctx.beginPath();
+      templeIndices.forEach((index, i) => {
+        const point = landmarks[index];
+        const x = point.x * width;
+        const y = point.y * height;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    });
+
+  }, []);
+
   // Process Frames
   const onResults = useCallback((results) => {
     if (!isMountedRef.current || status === 'capturing') return;
     if (!currentStep) return;
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+    console.log('onResults çağrıldı - Yüz sayısı:', hasFace ? results.multiFaceLandmarks.length : 0);
+
+    // Draw hair regions if face is detected
+    if (hasFace && overlayCanvasRef.current && activeOverlay === 'hairline') {
+      console.log('drawHairRegions çağrılıyor');
+      const landmarks = results.multiFaceLandmarks[0];
+      drawHairRegions(landmarks, overlayCanvasRef.current);
+    } else if (overlayCanvasRef.current) {
+      const ctx = overlayCanvasRef.current.getContext('2d');
+      ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+    }
 
     // 1. Manual Handling (Back & Top Views)
     // "Top" view also triggers this logic now, skipping face detection requirement
@@ -244,12 +323,31 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       setScanProgress(prev => Math.max(0, prev - 10));
     }
 
-  }, [currentStep, scanProgress, status]);
+  }, [currentStep, scanProgress, status, activeOverlay, drawHairRegions]);
 
   // Update ref for callback
   useEffect(() => {
     onResultsRef.current = onResults;
   }, [onResults]);
+
+  // Resize overlay canvas to match video
+  useEffect(() => {
+    const resizeCanvas = () => {
+      if (videoRef.current && overlayCanvasRef.current) {
+        const video = videoRef.current;
+        if (video.videoWidth > 0) {
+          overlayCanvasRef.current.width = video.videoWidth;
+          overlayCanvasRef.current.height = video.videoHeight;
+        }
+      }
+    };
+
+    const video = videoRef.current;
+    if (video) {
+      video.addEventListener('loadedmetadata', resizeCanvas);
+      return () => video.removeEventListener('loadedmetadata', resizeCanvas);
+    }
+  }, []);
 
   // Initialize MediaPipe and Camera via CDN scripts
   useEffect(() => {
@@ -258,10 +356,13 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         // Load scripts dynamically to avoid build errors
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js');
 
         if (!window.FaceMesh || !window.Camera) {
           throw new Error('MediaPipe failed to load');
         }
+
+        console.log('MediaPipe loaded successfully');
 
         const faceMesh = new window.FaceMesh({
           locateFile: (file) => {
@@ -283,6 +384,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         });
 
         faceMeshRef.current = faceMesh;
+        console.log('FaceMesh initialized');
 
         if (videoRef.current) {
           const camera = new window.Camera(videoRef.current, {
@@ -294,9 +396,10 @@ const LiveScanner = ({ onComplete, onCancel }) => {
             width: 1280,
             height: 720
           });
-          
-          camera.start();
+
+          await camera.start();
           cameraRef.current = camera;
+          console.log('Camera started');
         }
 
       } catch (error) {
@@ -602,13 +705,19 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           </div>
         )}
 
-        <video 
+        <video
           ref={videoRef}
-          autoPlay 
-          playsInline 
+          autoPlay
+          playsInline
           muted
           style={{ filter: `brightness(${brightness}%) contrast(${contrast}%)` }}
-          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-[filter] duration-200" 
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-[filter] duration-200"
+        />
+
+        <canvas
+          ref={overlayCanvasRef}
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] pointer-events-none"
+          style={{ zIndex: 10 }}
         />
         
         {/* HUD Overlays */}
