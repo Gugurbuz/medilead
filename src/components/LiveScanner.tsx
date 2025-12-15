@@ -240,6 +240,8 @@ const LiveScanner: React.FC<LiveScannerProps> = ({ onComplete, onCancel }) => {
   };
 
   const onResults = useCallback((results: any) => {
+    console.log('onResults çağrıldı, yüz sayısı:', results.multiFaceLandmarks?.length || 0);
+
     if (!isMountedRef.current || status === 'capturing') return;
     setIsModelLoaded(true);
 
