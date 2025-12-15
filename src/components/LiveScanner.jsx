@@ -98,6 +98,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [capturedImages, setCapturedImages] = useState([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const [isSegmenterLoaded, setIsSegmenterLoaded] = useState(false);
   
   // Camera Settings
   const [brightness, setBrightness] = useState(100);
@@ -116,6 +117,8 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   const isMountedRef = useRef(true);
   const faceMeshRef = useRef(null);
   const cameraRef = useRef(null);
+  const hairSegmenterRef = useRef(null);
+  const lastLandmarksRef = useRef(null);
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
@@ -164,15 +167,82 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
-  // Draw hair regions on canvas
+  // Segment Hair using MediaPipe Image Segmenter
+  const segmentHair = useCallback((video, startTimeMs) => {
+    if (!hairSegmenterRef.current || !video) return null;
+
+    try {
+      const result = hairSegmenterRef.current.segmentForVideo(video, startTimeMs);
+      return result;
+    } catch (error) {
+      console.error('Hair segmentation error:', error);
+      return null;
+    }
+  }, []);
+
+  // Draw Hair Mask with Beard Eraser Logic
+  const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
+    if (!hairResult || !hairResult.categoryMask) return;
+
+    const mask = hairResult.categoryMask;
+    const width = mask.width;
+    const height = mask.height;
+
+    const maskData = mask.getAsUint8Array();
+
+    const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
+    const data = imageData.data;
+
+    for (let i = 0; i < maskData.length; i++) {
+      const isHair = maskData[i] === 1;
+
+      if (isHair) {
+        const y = Math.floor(i / width);
+        const x = i % width;
+
+        const canvasX = Math.floor((x / width) * ctx.canvas.width);
+        const canvasY = Math.floor((y / height) * ctx.canvas.height);
+
+        let shouldDraw = true;
+
+        // BEARD ERASER: Remove beard/lower face hair using landmarks
+        if (landmarks) {
+          const chinY = landmarks[152].y * ctx.canvas.height;
+          const mouthBottomY = landmarks[14].y * ctx.canvas.height;
+
+          if (canvasY > chinY - 20) {
+            shouldDraw = false;
+          } else if (canvasY > mouthBottomY - 10) {
+            const leftCheek = landmarks[234].x * ctx.canvas.width;
+            const rightCheek = landmarks[454].x * ctx.canvas.width;
+            if (canvasX > leftCheek && canvasX < rightCheek) {
+              shouldDraw = false;
+            }
+          }
+        }
+
+        if (shouldDraw) {
+          const idx = (canvasY * ctx.canvas.width + canvasX) * 4;
+          if (idx >= 0 && idx < data.length - 3) {
+            data[idx] = 34;
+            data[idx + 1] = 197;
+            data[idx + 2] = 94;
+            data[idx + 3] = 180;
+          }
+        }
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  }, []);
+
+  // Draw hair regions with landmarks overlay
   const drawHairRegions = useCallback((landmarks, canvasElement) => {
     if (!canvasElement || !landmarks) return;
 
-    const ctx = canvasElement.getContext('2d');
+    const ctx = canvasElement.getContext('2d', { willReadFrequently: true });
     const width = canvasElement.width;
     const height = canvasElement.height;
-
-    ctx.clearRect(0, 0, width, height);
 
     // Hairline landmark indices (forehead area)
     const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
@@ -237,16 +307,47 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     if (!currentStep) return;
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
-    console.log('onResults çağrıldı - Yüz sayısı:', hasFace ? results.multiFaceLandmarks.length : 0);
+    const currentLandmarks = hasFace ? results.multiFaceLandmarks[0] : null;
 
-    // Draw hair regions if face is detected
-    if (hasFace && overlayCanvasRef.current && activeOverlay === 'hairline') {
-      console.log('drawHairRegions çağrılıyor');
-      const landmarks = results.multiFaceLandmarks[0];
-      drawHairRegions(landmarks, overlayCanvasRef.current);
-    } else if (overlayCanvasRef.current) {
-      const ctx = overlayCanvasRef.current.getContext('2d');
-      ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+    if (currentLandmarks) {
+      lastLandmarksRef.current = currentLandmarks;
+    }
+
+    // Segment hair and draw
+    let hairResult = null;
+    if (videoRef.current && isSegmenterLoaded && activeOverlay === 'hairline') {
+      const startTimeMs = performance.now();
+      hairResult = segmentHair(videoRef.current, startTimeMs);
+    }
+
+    try {
+      const canvas = overlayCanvasRef.current;
+      if (canvas && videoRef.current) {
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // LAYER 1: Hair Segmentation Mask (Bottom)
+          if (hairResult && activeOverlay === 'hairline') {
+            drawHairMask(ctx, hairResult, currentLandmarks || undefined);
+          }
+
+          // LAYER 2: Face Mesh Overlay (Top) - Landmarks
+          if (currentLandmarks && activeOverlay === 'hairline') {
+            drawHairRegions(currentLandmarks, canvas);
+          }
+        }
+      }
+    } finally {
+      // CRITICAL: Close MediaPipe masks to prevent memory leaks
+      if (hairResult) {
+        if (hairResult.categoryMask) {
+          hairResult.categoryMask.close();
+        }
+        if (hairResult.confidenceMasks) {
+          hairResult.confidenceMasks.forEach(mask => mask.close());
+        }
+      }
     }
 
     // 1. Manual Handling (Back & Top Views)
@@ -323,7 +424,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       setScanProgress(prev => Math.max(0, prev - 10));
     }
 
-  }, [currentStep, scanProgress, status, activeOverlay, drawHairRegions]);
+  }, [currentStep, scanProgress, status, activeOverlay, drawHairRegions, segmentHair, drawHairMask, isSegmenterLoaded]);
 
   // Update ref for callback
   useEffect(() => {
@@ -349,7 +450,53 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     }
   }, []);
 
-  // Initialize MediaPipe and Camera via CDN scripts
+  // Initialize MediaPipe Image Segmenter for Hair
+  useEffect(() => {
+    const initHairSegmenter = async () => {
+      try {
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/vision_bundle.js');
+
+        if (!window.ImageSegmenter || !window.FilesetResolver) {
+          console.error('ImageSegmenter not loaded from CDN');
+          return;
+        }
+
+        const vision = await window.FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm'
+        );
+
+        const imageSegmenter = await window.ImageSegmenter.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float16/latest/hair_segmenter.tflite',
+            delegate: 'GPU'
+          },
+          runningMode: 'VIDEO',
+          outputCategoryMask: true,
+          outputConfidenceMasks: false
+        });
+
+        hairSegmenterRef.current = imageSegmenter;
+        setIsSegmenterLoaded(true);
+        console.log('Hair Segmenter loaded successfully');
+
+      } catch (error) {
+        console.error('Error loading Hair Segmenter:', error);
+        setIsSegmenterLoaded(false);
+      }
+    };
+
+    initHairSegmenter();
+
+    return () => {
+      if (hairSegmenterRef.current) {
+        try {
+          hairSegmenterRef.current.close();
+        } catch(e) {}
+      }
+    };
+  }, []);
+
+  // Initialize MediaPipe FaceMesh and Camera via CDN scripts
   useEffect(() => {
     const initMediaPipe = async () => {
       try {
@@ -362,7 +509,7 @@ const LiveScanner = ({ onComplete, onCancel }) => {
           throw new Error('MediaPipe failed to load');
         }
 
-        console.log('MediaPipe loaded successfully');
+        console.log('MediaPipe FaceMesh loaded successfully');
 
         const faceMesh = new window.FaceMesh({
           locateFile: (file) => {
@@ -699,9 +846,12 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       {/* Camera View */}
       <div className="relative flex-1 bg-gray-900 overflow-hidden flex items-center justify-center">
         {!isModelLoaded && currentStep.guideType !== 'manual' && (
-          <div className="absolute z-30 flex flex-col items-center text-white/70">
+          <div className="absolute z-30 flex flex-col items-center text-white/70 bg-black/60 backdrop-blur-sm p-4 rounded-lg">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
-            <p>FaceMesh Başlatılıyor...</p>
+            <p className="font-medium">FaceMesh Başlatılıyor...</p>
+            {isSegmenterLoaded && (
+              <p className="text-xs text-green-400 mt-1">✓ Saç Segmentasyon Hazır</p>
+            )}
           </div>
         )}
 
