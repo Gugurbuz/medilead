@@ -12,6 +12,9 @@ interface Lifestyle {
 }
 
 interface PatientData {
+  name: string;
+  email: string;
+  phone: string;
   age: string;
   gender: string;
   hairLossDuration: string;
@@ -20,8 +23,10 @@ interface PatientData {
   medications: string;
   lifestyle: Lifestyle;
   goals: string;
-  // Dinamik erişim için index signature
-  [key: string]: string | Lifestyle | any; 
+  budgetMin: string;
+  budgetMax: string;
+  timeline: string;
+  [key: string]: string | Lifestyle | any;
 }
 
 interface PatientFormProps {
@@ -34,6 +39,9 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
   const { toast } = useToast();
   
   const [formData, setFormData] = useState<PatientData>(existingData || {
+    name: '',
+    email: '',
+    phone: '',
     age: '',
     gender: '',
     hairLossDuration: '',
@@ -45,7 +53,10 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
       diet: '',
       smoking: ''
     },
-    goals: ''
+    goals: '',
+    budgetMin: '',
+    budgetMax: '',
+    timeline: ''
   });
 
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -68,7 +79,7 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
 
-    if (!formData.age || !formData.gender || !formData.hairLossDuration) {
+    if (!formData.name || !formData.email || !formData.age || !formData.gender || !formData.hairLossDuration) {
       toast({
         title: "Missing required fields",
         description: "Please fill in all required fields marked with *",
@@ -99,9 +110,57 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <Label htmlFor="age" className="text-gray-700 font-medium">Age *</Label>
+          <div className="border-b border-gray-200 pb-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Contact Information</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="md:col-span-2">
+                <Label htmlFor="name" className="text-gray-700 font-medium">Full Name *</Label>
+                <input
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                  placeholder="Enter your full name"
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="email" className="text-gray-700 font-medium">Email Address *</Label>
+                <input
+                  type="email"
+                  id="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                  placeholder="your@email.com"
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="phone" className="text-gray-700 font-medium">Phone Number</Label>
+                <input
+                  type="tel"
+                  id="phone"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleChange}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                  placeholder="+1 (555) 000-0000"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="border-b border-gray-200 pb-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Basic Information</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <Label htmlFor="age" className="text-gray-700 font-medium">Age *</Label>
               <input
                 type="number"
                 id="age"
@@ -131,6 +190,7 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
                 <option value="female">Female</option>
                 <option value="other">Other</option>
               </select>
+            </div>
             </div>
           </div>
 
@@ -281,9 +341,67 @@ const PatientForm: React.FC<PatientFormProps> = ({ onSubmit, existingData = null
             />
           </div>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-            <p className="text-sm text-amber-800">
-              <strong>Privacy Notice:</strong> Your information is stored locally on your device and is used only to generate your personalized analysis report. We do not share your data with third parties.
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Budget & Timeline</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <div>
+                <Label htmlFor="budgetMin" className="text-gray-700 font-medium">
+                  Minimum Budget (USD)
+                </Label>
+                <input
+                  type="number"
+                  id="budgetMin"
+                  name="budgetMin"
+                  value={formData.budgetMin}
+                  onChange={handleChange}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                  placeholder="5000"
+                  min="0"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="budgetMax" className="text-gray-700 font-medium">
+                  Maximum Budget (USD)
+                </Label>
+                <input
+                  type="number"
+                  id="budgetMax"
+                  name="budgetMax"
+                  value={formData.budgetMax}
+                  onChange={handleChange}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+                  placeholder="15000"
+                  min="0"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="timeline" className="text-gray-700 font-medium">
+                Preferred Timeline for Treatment
+              </Label>
+              <select
+                id="timeline"
+                name="timeline"
+                value={formData.timeline}
+                onChange={handleChange}
+                className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200"
+              >
+                <option value="">Select timeline</option>
+                <option value="immediate">Immediate (Within 1 month)</option>
+                <option value="1-3-months">1-3 months</option>
+                <option value="3-6-months">3-6 months</option>
+                <option value="6-12-months">6-12 months</option>
+                <option value="flexible">Flexible</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <p className="text-sm text-blue-800">
+              <strong>Privacy Notice:</strong> Your information will be securely stored in our database and shared with matched hair restoration clinics to provide you with personalized consultations. We take your privacy seriously and only share data with verified medical professionals.
             </p>
           </div>
 

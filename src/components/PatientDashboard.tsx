@@ -8,6 +8,7 @@ import PatientForm from '@/components/PatientForm';
 import AnalysisReport from '@/components/AnalysisReport';
 import { processHairImage } from '@/lib/visionModel';
 import { analyzeHairImages, analyzeHairlineCoordinates } from '@/lib/geminiService';
+import { supabase } from '@/lib/supabase';
 
 const PatientDashboard = () => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -131,9 +132,54 @@ const PatientDashboard = () => {
     }
   };
 
-  const completeAnalysis = (data, photos, analysis) => {
+  const completeAnalysis = async (data, photos, analysis) => {
     setAnalysisData(analysis);
     localStorage.setItem('analysis_data', JSON.stringify(analysis));
+
+    try {
+      const leadData = {
+        name: data.name,
+        email: data.email,
+        phone: data.phone || null,
+        age: parseInt(data.age) || null,
+        budget_min: parseInt(data.budgetMin) || null,
+        budget_max: parseInt(data.budgetMax) || null,
+        timeline: data.timeline || null,
+        analysis_data: {
+          ...analysis,
+          patientProfile: {
+            gender: data.gender,
+            hairLossDuration: data.hairLossDuration,
+            familyHistory: data.familyHistory,
+            previousTreatments: data.previousTreatments,
+            medications: data.medications,
+            lifestyle: data.lifestyle,
+            goals: data.goals
+          }
+        },
+        photos: photos.map(p => ({
+          type: p.type,
+          preview: p.preview,
+          timestamp: p.timestamp
+        })),
+        status: 'new'
+      };
+
+      const { data: savedLead, error } = await supabase
+        .from('leads')
+        .insert([leadData])
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error saving lead to database:', error);
+      } else {
+        console.log('Lead saved successfully:', savedLead);
+      }
+    } catch (error) {
+      console.error('Error saving to database:', error);
+    }
+
     setIsAnalyzing(false);
     setCurrentStep(3);
   };
