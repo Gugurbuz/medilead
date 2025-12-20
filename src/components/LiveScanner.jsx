@@ -91,14 +91,12 @@ const RangeControl = ({ icon: Icon, label, value, onChange, min = 0, max = 200 }
 const LiveScanner = ({ onComplete, onCancel }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const overlayCanvasRef = useRef(null);
   const { toast } = useToast();
 
   // Logic State
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [capturedImages, setCapturedImages] = useState([]);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
-  const [isSegmenterLoaded, setIsSegmenterLoaded] = useState(false);
   
   // Camera Settings
   const [brightness, setBrightness] = useState(100);
@@ -117,8 +115,6 @@ const LiveScanner = ({ onComplete, onCancel }) => {
   const isMountedRef = useRef(true);
   const faceMeshRef = useRef(null);
   const cameraRef = useRef(null);
-  const hairSegmenterRef = useRef(null);
-  const lastLandmarksRef = useRef(null);
 
   const currentStep = SCAN_STEPS[currentStepIndex];
 
@@ -167,198 +163,12 @@ const LiveScanner = ({ onComplete, onCancel }) => {
     return { yaw, pitch, roll };
   };
 
-  // Segment Hair using MediaPipe Selfie Segmentation
-  const segmentHair = useCallback(async (video) => {
-    if (!hairSegmenterRef.current || !hairSegmenterRef.current.selfieSegmentation || !video) {
-      return null;
-    }
-
-    try {
-      return new Promise((resolve) => {
-        hairSegmenterRef.current.onSegmentationResults = (results) => {
-          hairSegmenterRef.current.lastResults = results;
-          resolve(results);
-        };
-
-        hairSegmenterRef.current.selfieSegmentation.send({ image: video });
-      });
-    } catch (error) {
-      console.error('Hair segmentation error:', error);
-      return hairSegmenterRef.current.lastResults;
-    }
-  }, []);
-
-  // Draw Hair Mask with hairline boundary
-  const drawHairMask = useCallback((ctx, hairResult, landmarks) => {
-    if (!hairResult || !hairResult.segmentationMask || !landmarks) return;
-
-    const mask = hairResult.segmentationMask;
-    const width = mask.width;
-    const height = mask.height;
-
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = width;
-    tempCanvas.height = height;
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCtx.drawImage(mask, 0, 0);
-
-    const maskData = tempCtx.getImageData(0, 0, width, height);
-    const maskPixels = maskData.data;
-
-    const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
-    const data = imageData.data;
-
-    // Hairline landmarks (forehead boundary)
-    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
-
-    // Create hairline polygon
-    const hairlinePolygon = hairlineIndices.map(idx => ({
-      x: landmarks[idx].x * ctx.canvas.width,
-      y: landmarks[idx].y * ctx.canvas.height
-    }));
-
-    // Check if point is above hairline (in hair region)
-    const isAboveHairline = (x, y) => {
-      let minY = Infinity;
-      for (let i = 0; i < hairlinePolygon.length; i++) {
-        const p1 = hairlinePolygon[i];
-        const p2 = hairlinePolygon[(i + 1) % hairlinePolygon.length];
-
-        if ((p1.x <= x && x <= p2.x) || (p2.x <= x && x <= p1.x)) {
-          const t = (x - p1.x) / (p2.x - p1.x);
-          const interpolatedY = p1.y + t * (p2.y - p1.y);
-          minY = Math.min(minY, interpolatedY);
-        }
-      }
-      return y < minY - 5;
-    };
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4;
-        const maskValue = maskPixels[idx];
-        const isBody = maskValue > 128;
-
-        if (isBody) {
-          const canvasX = Math.floor((x / width) * ctx.canvas.width);
-          const canvasY = Math.floor((y / height) * ctx.canvas.height);
-
-          if (isAboveHairline(canvasX, canvasY)) {
-            const canvasIdx = (canvasY * ctx.canvas.width + canvasX) * 4;
-            if (canvasIdx >= 0 && canvasIdx < data.length - 3) {
-              data[canvasIdx] = 34;
-              data[canvasIdx + 1] = 197;
-              data[canvasIdx + 2] = 94;
-              data[canvasIdx + 3] = 100;
-            }
-          }
-        }
-      }
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-  }, []);
-
-  // Draw hair regions with landmarks overlay
-  const drawHairRegions = useCallback((landmarks, canvasElement) => {
-    if (!canvasElement || !landmarks) return;
-
-    const ctx = canvasElement.getContext('2d', { willReadFrequently: true });
-    const width = canvasElement.width;
-    const height = canvasElement.height;
-
-    // Hairline landmark indices (forehead area)
-    const hairlineIndices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109];
-
-    // Draw hairline
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
-    ctx.lineWidth = 3;
-    ctx.shadowColor = 'rgba(34, 197, 94, 0.5)';
-    ctx.shadowBlur = 10;
-
-    hairlineIndices.forEach((index, i) => {
-      const point = landmarks[index];
-      const x = point.x * width;
-      const y = point.y * height;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    ctx.stroke();
-
-    // Draw key hairline points
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.9)';
-    hairlineIndices.forEach(index => {
-      const point = landmarks[index];
-      const x = point.x * width;
-      const y = point.y * height;
-      ctx.beginPath();
-      ctx.arc(x, y, 2, 0, 2 * Math.PI);
-      ctx.fill();
-    });
-
-    // Draw temporal regions (sides)
-    const leftTempleIndices = [234, 93, 132, 58, 172, 136, 150, 149];
-    const rightTempleIndices = [454, 323, 361, 288, 397, 365, 379, 378];
-
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
-    ctx.lineWidth = 2;
-
-    [leftTempleIndices, rightTempleIndices].forEach(templeIndices => {
-      ctx.beginPath();
-      templeIndices.forEach((index, i) => {
-        const point = landmarks[index];
-        const x = point.x * width;
-        const y = point.y * height;
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      ctx.stroke();
-    });
-
-  }, []);
-
   // Process Frames
-  const onResults = useCallback(async (results) => {
+  const onResults = useCallback((results) => {
     if (!isMountedRef.current || status === 'capturing') return;
     if (!currentStep) return;
 
     const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
-    const currentLandmarks = hasFace ? results.multiFaceLandmarks[0] : null;
-
-    if (currentLandmarks) {
-      lastLandmarksRef.current = currentLandmarks;
-    }
-
-    // Segment hair and draw
-    let hairResult = null;
-    if (videoRef.current && isSegmenterLoaded && activeOverlay === 'hairline') {
-      hairResult = await segmentHair(videoRef.current);
-    }
-
-    const canvas = overlayCanvasRef.current;
-    if (canvas && videoRef.current) {
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // LAYER 1: Hair Segmentation Mask (Bottom)
-        if (hairResult && activeOverlay === 'hairline') {
-          drawHairMask(ctx, hairResult, currentLandmarks || undefined);
-        }
-
-        // LAYER 2: Face Mesh Overlay (Top) - Landmarks
-        if (currentLandmarks && activeOverlay === 'hairline') {
-          drawHairRegions(currentLandmarks, canvas);
-        }
-      }
-    }
 
     // 1. Manual Handling (Back & Top Views)
     // "Top" view also triggers this logic now, skipping face detection requirement
@@ -434,101 +244,24 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       setScanProgress(prev => Math.max(0, prev - 10));
     }
 
-  }, [currentStep, scanProgress, status, activeOverlay, drawHairRegions, segmentHair, drawHairMask, isSegmenterLoaded]);
+  }, [currentStep, scanProgress, status]);
 
   // Update ref for callback
   useEffect(() => {
     onResultsRef.current = onResults;
   }, [onResults]);
 
-  // Resize overlay canvas to match video
-  useEffect(() => {
-    const resizeCanvas = () => {
-      if (videoRef.current && overlayCanvasRef.current) {
-        const video = videoRef.current;
-        if (video.videoWidth > 0) {
-          overlayCanvasRef.current.width = video.videoWidth;
-          overlayCanvasRef.current.height = video.videoHeight;
-        }
-      }
-    };
-
-    const video = videoRef.current;
-    if (video) {
-      video.addEventListener('loadedmetadata', resizeCanvas);
-      return () => video.removeEventListener('loadedmetadata', resizeCanvas);
-    }
-  }, []);
-
-  // Initialize MediaPipe Selfie Segmentation for Hair
-  useEffect(() => {
-    const initHairSegmenter = async () => {
-      try {
-        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js');
-
-        if (!window.SelfieSegmentation) {
-          console.error('SelfieSegmentation not loaded from CDN');
-          return;
-        }
-
-        const selfieSegmentation = new window.SelfieSegmentation({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${file}`;
-          }
-        });
-
-        selfieSegmentation.setOptions({
-          modelSelection: 1,
-        });
-
-        selfieSegmentation.onResults((results) => {
-          if (hairSegmenterRef.current && hairSegmenterRef.current.onSegmentationResults) {
-            hairSegmenterRef.current.onSegmentationResults(results);
-          }
-        });
-
-        await selfieSegmentation.initialize();
-
-        hairSegmenterRef.current = {
-          selfieSegmentation,
-          onSegmentationResults: null,
-          lastResults: null
-        };
-
-        setIsSegmenterLoaded(true);
-        console.log('Selfie Segmentation loaded successfully');
-
-      } catch (error) {
-        console.error('Error loading Selfie Segmentation:', error);
-        setIsSegmenterLoaded(false);
-      }
-    };
-
-    initHairSegmenter();
-
-    return () => {
-      if (hairSegmenterRef.current && hairSegmenterRef.current.selfieSegmentation) {
-        try {
-          hairSegmenterRef.current.selfieSegmentation.close();
-        } catch(e) {}
-      }
-    };
-  }, []);
-
-  // Initialize MediaPipe FaceMesh and Camera via CDN scripts
+  // Initialize MediaPipe and Camera via CDN scripts
   useEffect(() => {
     const initMediaPipe = async () => {
       try {
         // Load scripts dynamically to avoid build errors
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js');
         await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
-        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js');
 
         if (!window.FaceMesh || !window.Camera) {
           throw new Error('MediaPipe failed to load');
         }
-
-        console.log('MediaPipe FaceMesh loaded successfully');
 
         const faceMesh = new window.FaceMesh({
           locateFile: (file) => {
@@ -550,7 +283,6 @@ const LiveScanner = ({ onComplete, onCancel }) => {
         });
 
         faceMeshRef.current = faceMesh;
-        console.log('FaceMesh initialized');
 
         if (videoRef.current) {
           const camera = new window.Camera(videoRef.current, {
@@ -562,10 +294,9 @@ const LiveScanner = ({ onComplete, onCancel }) => {
             width: 1280,
             height: 720
           });
-
-          await camera.start();
+          
+          camera.start();
           cameraRef.current = camera;
-          console.log('Camera started');
         }
 
       } catch (error) {
@@ -865,28 +596,19 @@ const LiveScanner = ({ onComplete, onCancel }) => {
       {/* Camera View */}
       <div className="relative flex-1 bg-gray-900 overflow-hidden flex items-center justify-center">
         {!isModelLoaded && currentStep.guideType !== 'manual' && (
-          <div className="absolute z-30 flex flex-col items-center text-white/70 bg-black/60 backdrop-blur-sm p-4 rounded-lg">
+          <div className="absolute z-30 flex flex-col items-center text-white/70">
             <RefreshCw className="w-10 h-10 animate-spin mb-2" />
-            <p className="font-medium">FaceMesh Başlatılıyor...</p>
-            {isSegmenterLoaded && (
-              <p className="text-xs text-green-400 mt-1">✓ Saç Segmentasyon Hazır</p>
-            )}
+            <p>FaceMesh Başlatılıyor...</p>
           </div>
         )}
 
-        <video
+        <video 
           ref={videoRef}
-          autoPlay
-          playsInline
+          autoPlay 
+          playsInline 
           muted
           style={{ filter: `brightness(${brightness}%) contrast(${contrast}%)` }}
-          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-[filter] duration-200"
-        />
-
-        <canvas
-          ref={overlayCanvasRef}
-          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] pointer-events-none"
-          style={{ zIndex: 10 }}
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] transition-[filter] duration-200" 
         />
         
         {/* HUD Overlays */}
