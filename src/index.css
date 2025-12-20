@@ -52,3 +52,100 @@
 .animate-scan {
   animation: scan-vertical 2s linear infinite;
 }
+
+/* Hair Wave Animations */
+@keyframes hairFlowOrganic {
+  0%, 100% {
+    transform: translateX(0) translateY(0) scaleY(1);
+  }
+  25% {
+    transform: translateX(-10px) translateY(-5px) scaleY(1.05);
+  }
+  50% {
+    transform: translateX(0) translateY(-8px) scaleY(0.95);
+  }
+  75% {
+    transform: translateX(10px) translateY(-5px) scaleY(1.05);
+  }
+}
+
+@keyframes strandPulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmerEffect {
+  0% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.3);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+.shimmer-line {
+  animation: shimmerEffect 3s ease-in-out infinite;
+}
+
+/* Landing Page Animations */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-from-top-12 {
+  from {
+    transform: translateY(-3rem);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-from-bottom-12 {
+  from {
+    transform: translateY(3rem);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: fade-in;
+}
+
+.slide-in-from-top-12 {
+  animation-name: slide-in-from-top-12, fade-in;
+}
+
+.slide-in-from-bottom-12 {
+  animation-name: slide-in-from-bottom-12, fade-in;
+}
+
+.duration-1000 {
+  animation-duration: 1000ms;
+}
+
+.delay-200 {
+  animation-delay: 200ms;
+}
+
+.delay-300 {
+  animation-delay: 300ms;
+}
