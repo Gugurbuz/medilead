@@ -1,9 +1,13 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Activity } from 'lucide-react';
+import { Activity, Home } from 'lucide-react';
 
-const Header = () => {
+interface HeaderProps {
+  onGoToHomepage?: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onGoToHomepage }) => {
   return (
     <motion.header
       initial={{ opacity: 0, y: -20 }}
@@ -22,6 +26,15 @@ const Header = () => {
               <p className="text-sm text-gray-500">AI-Powered Patient Assessment</p>
             </div>
           </div>
+          {onGoToHomepage && (
+            <button
+              onClick={onGoToHomepage}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 shadow-sm hover:shadow"
+            >
+              <Home className="w-4 h-4" />
+              <span>Home</span>
+            </button>
+          )}
         </div>
       </div>
     </motion.header>
