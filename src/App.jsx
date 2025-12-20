@@ -1,9 +1,12 @@
-
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Toaster } from '@/components/ui/toaster';
 import PatientDashboard from '@/components/PatientDashboard';
+import LandingScreen from '@/components/LandingScreen';
 
 function App() {
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [language, setLanguage] = useState('EN');
+
   useEffect(() => {
     document.title = 'Hair Loss Analysis - Patient Portal';
     const metaDescription = document.querySelector('meta[name="description"]');
@@ -12,9 +15,26 @@ function App() {
     }
   }, []);
 
+  const handleStart = () => {
+    setShowDashboard(true);
+  };
+
+  const handleGoToHomepage = () => {
+    setShowDashboard(false);
+  };
+
+  if (!showDashboard) {
+    return (
+      <>
+        <LandingScreen onStart={handleStart} lang={language} />
+        <Toaster />
+      </>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-      <PatientDashboard />
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100">
+      <PatientDashboard onGoToHomepage={handleGoToHomepage} />
       <Toaster />
     </div>
   );
